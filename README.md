@@ -45,7 +45,7 @@ Tip: if your Python client errors on proxy env vars in this VM, bypass with
 
 ## Relay pool (opencode free tier)
 
-- 13,594 Vercel relays in sqlite `pools` table (append-only, deduped by URL)
+- Relay pool stored in sqlite `pools` table (append-only, deduped by URL); bring your own relays
 - Rotation strategies: `random` | `round-robin` | `first` — global default + per-provider override (`default|random|round-robin|first|direct`)
 - Failover: each request walks healthy relays one by one (up to 10 attempts)
 - **Automatic 429 quarantine**: a relay returning HTTP 429 is skipped for 24h (persisted in sqlite, survives restarts, auto-recovers, cleared on success). HTTP 403 quarantines for 1h (intermittent egress-IP blocks)
