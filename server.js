@@ -645,8 +645,60 @@ function escHtml(s) {
 }
 
 // ---------------- model capabilities (ala 9router) ----------------
-// Deteksi otomatis dari nama model: vision, reasoning/thinking, tools.
+// Layered detection (first match wins), ala 9router capabilities.js:
+//   1. config.model_caps[id]            — manual override (prioritas tertinggi)
+//   2. models.dev catalog               — 9000+ model, modalities akurat
+//   3. regex fallback                   — tebakan dari nama model
 // Bisa dioverride manual via config.model_caps = { "id/model": {vision:true,...} }
+const MODELS_DEV_PATH = path.join(__dirname, 'models.dev.json');
+const MODELS_DEV_TTL_MS = 7 * 24 * 3600 * 1000; // refresh mingguan
+let modelsDevIndex = null; // Map: lowercased model id -> {vision, reasoning, tools}
+function buildModelsDevIndex(data) {
+  const idx = new Map();
+  try {
+    for (const prov of Object.values(data || {})) {
+      const models = (prov && prov.models) || {};
+      for (const [mid, m] of Object.entries(models)) {
+        if (!m || typeof m !== 'object') continue;
+        const key = String(mid).toLowerCase();
+        if (idx.has(key)) continue;
+        const input = ((m.modalities || {}).input || []).map(String);
+        idx.set(key, {
+          vision: input.some(x => /image|video/i.test(x)),
+          reasoning: !!m.reasoning,
+          tools: m.tool_call !== false,
+        });
+      }
+    }
+  } catch {}
+  return idx;
+}
+function refreshModelsDevCatalog() {
+  // background refresh, jangan blokir startup
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  fetch('https://models.dev/api.json', { signal: ctrl.signal })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(data => {
+      modelsDevIndex = buildModelsDevIndex(data);
+      try { fs.writeFileSync(MODELS_DEV_PATH, JSON.stringify(data)); } catch {}
+      console.log('[caps] models.dev catalog refreshed:', modelsDevIndex.size, 'models');
+    })
+    .catch(e => console.log('[caps] models.dev refresh gagal:', e.message))
+    .finally(() => clearTimeout(timer));
+}
+(function initModelsDevCatalog() {
+  try {
+    const st = fs.statSync(MODELS_DEV_PATH);
+    if (Date.now() - st.mtimeMs < MODELS_DEV_TTL_MS) {
+      modelsDevIndex = buildModelsDevIndex(JSON.parse(fs.readFileSync(MODELS_DEV_PATH, 'utf8')));
+      console.log('[caps] models.dev catalog loaded:', modelsDevIndex.size, 'models');
+      return;
+    }
+  } catch {}
+  refreshModelsDevCatalog();
+  setInterval(refreshModelsDevCatalog, MODELS_DEV_TTL_MS).unref?.();
+})();
 function getModelCaps(fullId) {
   const id = String(fullId || '');
   const bare = id.includes('/') ? id.split('/').pop() : id;
@@ -658,6 +710,12 @@ function getModelCaps(fullId) {
       tools: manual.tools !== false,
     };
   }
+  // layer 2: models.dev catalog (exact id match, bare atau full)
+  if (modelsDevIndex) {
+    const hit = modelsDevIndex.get(bare.toLowerCase()) || modelsDevIndex.get(id.toLowerCase());
+    if (hit) return { vision: hit.vision, reasoning: hit.reasoning, tools: hit.tools };
+  }
+  // layer 3: regex fallback
   const n = (bare + ' ' + id).toLowerCase();
   const vision = /vision|vl\b|multimodal|omnimodal|image|gpt-4o|claude-3|claude-4|gemini.*(pro|flash)|qwen.*vl|internvl|llava|minicpm-v|mimo/.test(n)
     && !/text-only|no-vision/.test(n);
