@@ -1,31 +1,34 @@
 # rerouter (JS)
 
-Lightweight JS router, 9router-style tapi minimal. Zero deps, Node 22+.
+Lightweight OpenAI-compatible AI gateway, 9router-style but minimal. Zero dependencies, Node 22+.
+
+Routes chat requests through a pool of relay proxies (for OpenCode free tier) or directly to custom OpenAI-compatible providers, with automatic failover, per-relay 429 quarantine, and token-saving features.
 
 ## Run
 
 ```bash
-node server.js   # baca config.json, listen :20129
+cp config.example.json config.json   # then fill in your api_key
+node server.js                        # reads config.json, listens on :20129
 ```
+
+If `config.json` is missing, the server falls back to `config.example.json` (remember to set your `api_key`).
 
 ## Endpoints
 
-- `GET /` → dashboard (instant, models manual via tombol)
+- `GET /` → tabbed dashboard (login required, default password `123456`)
 - `GET /health` → `{ok, pools, strategy, runtime}`
-- `GET /v1/models` + `/api/v1/models` → `oc/*` + `<custom-id>/*` (cache 10 menit)
-- `POST /v1/chat/completions` → stream + non-stream, failover relay (opencode) / langsung (custom)
-- `GET /admin/stats` → butuh `Authorization: Bearer <api_key>`
-## Connect (endpoint + key ala 9router, buat Hermes/dll)
+- `GET /v1/models` → `oc/*` + `<custom-id>/*` + `combo/*` + `rr/*` (cached 10 min)
+- `POST /v1/chat/completions` → stream + non-stream, relay failover (opencode) / direct (custom providers)
+- `GET /admin/stats` → requires `Authorization: Bearer <api_key>`
 
-Dashboard tab **Overview** → kartu **Connect** menampilkan base URL + API key
-(tombol copy + contoh kode Python). Setara 9router:
+## Connect (for Hermes / CLI tools)
+
+Dashboard tab **Overview** → **Connect** card shows the base URL + API key (copy button + Python example):
 
 ```
 Endpoint: http://localhost:20129/v1
-API Key:  [copy dari dashboard]   → Authorization: Bearer <key>
+API Key:  [copy from dashboard]   → Authorization: Bearer <key>
 ```
-
-Contoh pakai (Python, gaya Hermes):
 
 ```python
 from openai import OpenAI
@@ -34,89 +37,69 @@ r = client.chat.completions.create(
     model="oc/mimo-v2.6-flash-free",
     messages=[{"role": "user", "content": "hi"}])
 print(r.choices[0].message.content)
-# model custom provider: "<id>/<model>", mis. "myprov/deepseek-chat"
+# custom provider model: "<id>/<model>", e.g. "myprov/deepseek-chat"
 ```
 
+Tip: if your Python client errors on proxy env vars in this VM, bypass with
+`OpenAI(..., http_client=httpx.Client(trust_env=False))` or unset proxy vars for localhost.
+
+## Relay pool (opencode free tier)
+
+- 13,594 Vercel relays in sqlite `pools` table (append-only, deduped by URL)
+- Rotation strategies: `random` | `round-robin` | `first` — global default + per-provider override (`default|random|round-robin|first|direct`)
+- Failover: each request walks healthy relays one by one (up to 10 attempts)
+- **Automatic 429 quarantine**: a relay returning HTTP 429 is skipped for 24h (persisted in sqlite, survives restarts, auto-recovers, cleared on success). HTTP 403 quarantines for 1h (intermittent egress-IP blocks)
+- Request-scoped errors (400/401/404/422) are returned immediately without burning relays; only fallbackable errors (403/429/5xx/timeout) trigger failover
+- Dashboard tab **Providers** → Relay Pool card lists quarantined relays with remaining time + manual recover buttons
+- Admin: `GET/POST /admin/relay` (`global_strategy`, per-provider `mode`, `quarantined` list, `clear_quarantine`)
+
+## Admin API
+
 - `POST /admin/regen-session` → refresh `x-opencode-session`
-- `POST /admin/rotate-key` → generate API key baru (key lama langsung mati),
-  tersimpan ke `config.json`. Ada tombol **rotate** di dashboard.
-- **Password dashboard** (ala 9router): buka dashboard web wajib login, default `123456`
-  (hash SHA-256 di `config.json`), sesi cookie HttpOnly 24 jam. Ganti lewat kartu
-  🔐 Keamanan di tab Overview, atau `POST /admin/change-password`
-  `{old_password, new_password}` (min. 4 karakter). API (`/v1`, `/admin`) tetap pakai API key.
-- `POST /admin/benchmark` → `{providers?, models_per_provider? (1-10), runs? (1-3), prompt?}` speed test latency per model per provider, hasil ranking + success rate (kartu Speed Test di tab Providers).
-- `GET/POST /admin/relay` → atur relay pool per provider: `default|random|round-robin|first|direct` + strategi global (kartu Relay Pool di tab Providers). Pool: 9795 relay Vercel di sqlite `pools`.
-- `GET /admin/usage?period=today|24h|3d|7d|30d|all` → statistik + token input/output/cache per periode (tab Usage ada period selector). Token dari upstream bila tersedia, bila tidak estimasi ±4 char/token; kolom `prompt_tokens, completion_tokens, cached_tokens` di `usage_log`.
-- `GET/POST /admin/relay` → atur relay pool per provider: `default|random|round-robin|first|direct` + strategi global (kartu Relay Pool di tab Providers). Pool: 9795 relay Vercel di sqlite `pools`.
-- `GET /admin/usage?period=today|24h|3d|7d|30d|all` → statistik + token input/output/cache per periode (tab Usage ada period selector). Token dari upstream bila tersedia, bila tidak estimasi ±4 char/token; kolom `prompt_tokens, completion_tokens, cached_tokens` di `usage_log`.
-- Tips: kalau client Python di VM ini error soal proxy env, bypass dengan
-  `OpenAI(..., http_client=httpx.Client(trust_env=False))` atau unset proxy vars
-  untuk localhost.
-- `GET /admin/providers` → daftar custom provider (key disamarkan)
-- `POST /admin/providers` → tambah/update `{id, name, base_url, api_key?, api_keys?[], models[]}`.
-  **models boleh kosong** → otomatis detect dari `<base_url>/models` (tidak perlu isi manual).
-  **Smart merge**: bila `base_url` sudah terdaftar, cukup kirim `api_key` baru (id boleh kosong)
-  → key digabung ke provider existing, tidak bikin duplikat (rotasi otomatis per request)
-- `PATCH /admin/providers/<id>` → rename / ganti base_url / enable-disable `{name?, base_url?, enabled?}`
-- `POST /admin/providers/<id>/keys` → tambah API key `{key}` (multi-key, rotasi otomatis per request ala 9router)
-- `DELETE /admin/providers/<id>/keys/<idx>` → hapus API key
-- `POST /admin/providers/<id>/models` → tambah 1 model `{model}`
-- `DELETE /admin/providers/<id>/models/<model>` → hapus 1 model
-- `POST /admin/providers/<id>/refresh` → tarik ulang daftar model dari upstream `/models`
-- `DELETE /admin/providers/<id>` → hapus
-- `POST /admin/providers/<id>/test` → test konektivitas (GET `<base>/models`)
+- `POST /admin/rotate-key` → generate a new API key (old one dies immediately), saved to `config.json`
+- `POST /admin/change-password` → `{old_password, new_password}` (min 4 chars), or via the lock card in Overview tab. API (`/v1`, `/admin`) still uses the API key
+- `POST /admin/benchmark` → `{providers?, models_per_provider? (1-10), runs? (1-3), prompt?}` latency speed test per model per provider with ranking + success rate
+- `GET /admin/usage?period=today|24h|3d|7d|30d|all` → stats + input/output/cached tokens per period (Usage tab has a period selector). Tokens from upstream when available, otherwise estimated at ~4 chars/token; stored in `usage_log(prompt_tokens, completion_tokens, cached_tokens)`
+- `GET /admin/providers` → list custom providers (keys masked)
+- `POST /admin/providers` → add/update `{id, name, base_url, api_key?, api_keys?[], models[]}`. `models` may be empty → auto-detected from `<base_url>/models`. **Smart merge**: if `base_url` is already registered, just send a new `api_key` (id may be empty) → key is merged into the existing provider, no duplicates (automatic per-request rotation)
+- `PATCH /admin/providers/<id>` → rename / change base_url / enable-disable `{name?, base_url?, enabled?}`
+- `POST /admin/providers/<id>/keys` → add API key `{key}` (multi-key, automatic per-request rotation)
+- `DELETE /admin/providers/<id>/keys/<idx>` → delete API key
+- `POST /admin/providers/<id>/models` → add one model `{model}`
+- `DELETE /admin/providers/<id>/models/<model>` → delete one model
+- `POST /admin/providers/<id>/refresh` → re-fetch model list from upstream `/models`
+- `DELETE /admin/providers/<id>` → delete provider
+- `POST /admin/providers/<id>/test` → connectivity test (GET `<base>/models`)
 
-Dashboard tab **Providers**: tiap provider bisa di-expand (tombol **kelola**)
-untuk rename, ganti base URL, toggle aktif, tambah/hapus API key
-(disamarkan, rotasi per request), tambah/hapus model per model,
-dan refresh model dari upstream.
+Dashboard tab **Providers**: each provider expands (via **manage**) for rename, base URL change, active toggle, add/remove API keys (masked, rotated per request), per-model add/remove, and upstream model refresh.
 
-## Fitur AI ala 9router (tab dashboard "Fitur AI")
+## AI features (dashboard "Fitur AI" tab)
 
-- **RTK token saver** (`rtk_enabled`): deteksi format output tool
-  (git diff/log/status, grep, find, ls, tree, build log, log duplikat…)
-  lalu kompres per format — hemat 20-40% token input per request.
-  Header respons: `X-RTK-Saved: <bytes>`.
-- **Caveman** (`caveman_enabled`, level `lite|full|ultra`): injeksi instruksi
-  terse ke system prompt — model menjawab ringkas, hemat output token.
-  Header: `X-Caveman: <level>`.
-- **Vision adaptor** (`vision_strip`, default ON): untuk model di
-  `no_vision_models`, blok `image_url` di-strip jadi teks placeholder
-  supaya request tidak gagal total. Header: `X-Vision-Stripped: <n>`.
-- **Combo** (`combo/<nama>`): model virtual berisi urutan model asli —
-  otomatis fallback ke berikutnya bila gagal (retryable: 429/5xx/network).
-  Header `X-Model` menunjukkan model yang benar-benar dipakai.
-- **Fallbacks**: map `{"oc/model-a": ["oc/model-b"]}` — model biasa juga
-  dapat fallback otomatis bila gagal.
-- **Round-robin** (`rr/<nama>`): tiap request giliran model berikutnya
-  dari pool, mis. `{"free": ["oc/a", "oc/b"]}`.
-- Admin API: `GET/PUT /admin/features`, `GET/POST /admin/combos`,
-  `DELETE /admin/combos/<nama>`, `PUT /admin/fallbacks`,
-  `PUT /admin/round-robin`. `/v1/models` ikut menampilkan
-  `combo/*` dan `rr/*`.
+- **RTK token saver** (`rtk_enabled`): detects tool output formats (git diff/log/status, grep, find, ls, tree, build logs, duplicate logs...) and compresses per format — saves 20-40% input tokens per request. Response header: `X-RTK-Saved: <bytes>`
+- **Caveman** (`caveman_enabled`, level `lite|full|ultra`): injects terse instructions into the system prompt — model answers concisely, saving output tokens. Header: `X-Caveman: <level>`
+- **Vision adaptor** (`vision_strip`, default ON): for models in `no_vision_models`, `image_url` blocks are stripped to a text placeholder so requests don't fail entirely. Header: `X-Vision-Stripped: <n>`
+- **Combo** (`combo/<name>`): virtual model containing an ordered list of real models — automatically falls back to the next on failure (retryable: 429/5xx/network). Header `X-Model` shows which model actually served
+- **Fallbacks**: map `{"oc/model-a": ["oc/model-b"]}` — plain models also get automatic fallback on failure
+- **Round-robin** (`rr/<name>`): each request rotates to the next model from the pool, e.g. `{"free": ["oc/a", "oc/b"]}`
+- Admin API: `GET/PUT /admin/features`, `GET/POST /admin/combos`, `DELETE /admin/combos/<name>`, `PUT /admin/fallbacks`, `PUT /admin/round-robin`
 
-## Custom Provider (OpenAI-compatible)
+## Custom providers (OpenAI-compatible)
 
-Tambah lewat dashboard tab **Providers** atau API. Contoh:
+Add via dashboard tab **Providers** or the API:
 
 ```bash
 curl -X POST localhost:20129/admin/providers \
   -H "Authorization: Bearer <api_key>" -H 'Content-Type: application/json' \
-  -d '{"id":"myprov","name":"My Provider","base_url":"https://api.contoh.com/v1",
+  -d '{"id":"myprov","name":"My Provider","base_url":"https://api.example.com/v1",
        "api_key":"sk-...","models":["deepseek-chat","gpt-4o-mini"]}'
 ```
 
-- Model dipakai sebagai `myprov/deepseek-chat` (prefix `<id>/`, ala 9router).
-- Request langsung ke `<base_url>/chat/completions`, tanpa relay pool,
-  payload OpenAI diteruskan apa adanya (cuma `model` yang di-override).
-- Config tersimpan di `config.json` → `custom_providers` (persisten restart).
-- Stream SSE di-pass through; non-stream terima SSE maupun JSON polos.
+- Models are used as `myprov/deepseek-chat` (prefix `<id>/`, 9router-style)
+- Requests go directly to `<base_url>/chat/completions`, no relay pool; the OpenAI payload is passed through as-is (only `model` is overridden)
+- Config persists in `config.json` → `custom_providers` (survives restarts)
+- SSE streaming is passed through; non-stream accepts both SSE and plain JSON
 
 ## Notes
 
-- Pool diimport dari 9router db (`~/.9router/db/data.sqlite` → `rerouter.db`).
-  Append-only, dedupe by URL.
-- Chat upstream saat ini 403 `FreeTierError` (sama kayak versi Python):
-  free tier zen cuma bisa dari dalam OpenCode. Router-nya sehat,
-  upstream-nya yang nolak.
-- Python lama diarsip ke `server.py.bak`, bukan yang jalan.
+- Never commit `config.json`, `*.db`, `*.log`, or `shots/` — see `.gitignore`. Copy `config.example.json` to `config.json` and fill in your keys
+- The legacy Python server is archived as `server.py.bak`; `server.js` is the active one
