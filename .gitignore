@@ -1,0 +1,14 @@
+# secrets & local state — jangan pernah commit
+config.json
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+*.bak
+server.js.bak-*
+.env
+.env.*
+node_modules/
+shots/
+.DS_Store

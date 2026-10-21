@@ -1,0 +1,9 @@
+{
+  "name": "rerouter",
+  "version": "0.1.0",
+  "description": "rerouter — lightweight JS router, 9router-style but minimal",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
