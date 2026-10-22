@@ -1619,7 +1619,7 @@ a:hover{text-decoration-color:var(--txt)}
 
 <section class="panel" id="p-providers">
   <div class="card"><h2>Relay Pool <span class="tag" id="relay-count"></span></h2>
-    <div class="muted" style="margin-bottom:12px">Relay dipakai untuk menyamarkan IP egress. Atur strategi per provider ala 9router.</div>
+    <div class="muted" style="margin-bottom:12px">Relay dipakai untuk menyamarkan IP egress. Atur strategi tiap provider.</div>
     <div id="relay-provs" style="margin-top:6px"></div>
     <div id="relay-quar" style="margin-top:10px"></div>
   </div>
@@ -2484,6 +2484,8 @@ async function renderNoVisionPicker() {
   var sel = window._novisionSel || [];
   var list = window.allModels.filter(function (x) { return x.id.indexOf('combo/') !== 0 && x.id.indexOf('rr/') !== 0 && (!q || x.id.toLowerCase().indexOf(q) >= 0); });
   list.sort(function (a, b) {
+    var as = sel.indexOf(a.id) >= 0 ? 0 : 1, bs = sel.indexOf(b.id) >= 0 ? 0 : 1;
+    if (as !== bs) return as - bs;
     var av = !(a.caps && a.caps.vision), bv = !(b.caps && b.caps.vision);
     return (bv - av) || (a.id < b.id ? -1 : 1);
   });
@@ -2542,6 +2544,13 @@ async function renderComboPicker() {
   var pv = window._comboProv || '';
   var sel = window._comboSel || [];
   var list = window.allModels.filter(function (x) { return x.id.indexOf('combo/') !== 0 && x.id.indexOf('rr/') !== 0 && (!pv || comboProvOf(x.id) === pv) && (!q || x.id.toLowerCase().indexOf(q) >= 0); });
+  list.sort(function (a, b) {
+    var ai = sel.indexOf(a.id), bi = sel.indexOf(b.id);
+    var as = ai >= 0 ? 0 : 1, bs = bi >= 0 ? 0 : 1;
+    if (as !== bs) return as - bs;
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    return a.id < b.id ? -1 : 1;
+  });
   box.innerHTML = '';
   if (!list.length) { box.innerHTML = '<div class="muted" style="padding:8px">tidak ada model cocok</div>'; return; }
   list.forEach(function (x) {
