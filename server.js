@@ -511,13 +511,18 @@ function importFrom9router() {
       added++;
     } catch { continue; }
   }
+  invalidatePoolsCache();
   const total = db.prepare('SELECT COUNT(*) c FROM pools').get().c;
   return [added, 'total=' + total];
 }
+let poolsCache = null; // pool hanya ditulis saat bulk import -> aman di-cache
 function activePools() {
-  return db.prepare('SELECT url FROM pools WHERE isActive=1').all()
+  if (poolsCache) return poolsCache;
+  poolsCache = db.prepare('SELECT url FROM pools WHERE isActive=1').all()
     .map(r => r.url).filter(Boolean);
+  return poolsCache;
 }
+function invalidatePoolsCache() { poolsCache = null; }
 let rrCounter = 0;
 function pickPool(pools, strategy) {
   const s = strategy || STRATEGY;
@@ -535,6 +540,7 @@ const FALLBACKABLE = new Set([403, 429, 500, 502, 503, 504]);
 function quarantineRelay(relay, secs, status) {
   try {
     const now = Math.floor(Date.now() / 1000);
+    try { db.prepare('DELETE FROM relay_cooldowns WHERE limited_until < ?').run(now); } catch {}
     const s = Math.min(Math.max(parseInt(secs) || QUARANTINE_SECS, 60), QUARANTINE_SECS);
     db.prepare(`INSERT INTO relay_cooldowns(url, limited_until, strikes, last_429_ts)
       VALUES(?,?,1,?)
@@ -553,8 +559,16 @@ function isRelayQuarantined(relay) {
     return !!(r && r.limited_until > Math.floor(Date.now() / 1000));
   } catch { return false; }
 }
+function quarantinedSet() {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    return new Set(db.prepare('SELECT url FROM relay_cooldowns WHERE limited_until > ?').all(now).map(r => r.url));
+  } catch { return new Set(); }
+}
 function availablePools() {
-  return activePools().filter(u => !isRelayQuarantined(u));
+  const q = quarantinedSet();
+  if (!q.size) return activePools();
+  return activePools().filter(u => !q.has(u));
 }
 function quarantineList() {
   try {
@@ -567,7 +581,9 @@ function logUse(provider, model, relay, status, ms) {
   try {
     const r = db.prepare('INSERT INTO usage_log(ts,provider,model,relay,status,ms) VALUES(?,?,?,?,?,?)')
       .run(Math.floor(Date.now() / 1000), provider, model, relay, status, ms);
-    return Number(r.lastInsertRowid) || null;
+    const id = Number(r.lastInsertRowid) || null;
+    if (id && id % 100 === 0) { try { db.prepare('DELETE FROM usage_log WHERE id <= ?').run(id - 10000); } catch {} }
+    return id;
   } catch { return null; }
 }
 // update token usage setelah response diproses (id dari logUse)
@@ -669,7 +685,10 @@ function escHtml(s) {
 // Bisa dioverride manual via config.model_caps = { "id/model": {vision:true,...} }
 const MODELS_DEV_PATH = path.join(__dirname, 'models.dev.json');
 const MODELS_DEV_TTL_MS = 7 * 24 * 3600 * 1000; // refresh mingguan
-let modelsDevIndex = null; // Map: lowercased model id -> {vision, reasoning, tools}
+// Lazy + compact (ala 9router: tanpa Map object 4008 entry di startup).
+// Map: lowercased model id -> bitmask int (1=vision, 2=reasoning, 4=tools).
+let modelsDevIndex = null;
+let modelsDevReady = false;
 function buildModelsDevIndex(data) {
   const idx = new Map();
   try {
@@ -680,15 +699,28 @@ function buildModelsDevIndex(data) {
         const key = String(mid).toLowerCase();
         if (idx.has(key)) continue;
         const input = ((m.modalities || {}).input || []).map(String);
-        idx.set(key, {
-          vision: input.some(x => /image|video/i.test(x)),
-          reasoning: !!m.reasoning,
-          tools: m.tool_call !== false,
-        });
+        let b = 0;
+        if (input.some(x => /image|video/i.test(x))) b |= 1;
+        if (m.reasoning) b |= 2;
+        if (m.tool_call !== false) b |= 4;
+        idx.set(key, b);
       }
     }
   } catch {}
   return idx;
+}
+function ensureModelsDevIndex() {
+  if (modelsDevReady) return modelsDevIndex;
+  modelsDevReady = true;
+  try {
+    const st = fs.statSync(MODELS_DEV_PATH);
+    if (Date.now() - st.mtimeMs < MODELS_DEV_TTL_MS) {
+      const raw = fs.readFileSync(MODELS_DEV_PATH, 'utf8');
+      modelsDevIndex = buildModelsDevIndex(JSON.parse(raw));
+      console.log('[caps] models.dev index loaded (lazy, compact):', modelsDevIndex.size, 'models');
+    }
+  } catch (e) { console.log('[caps] models.dev lazy load gagal:', e.message); }
+  return modelsDevIndex;
 }
 function refreshModelsDevCatalog() {
   // background refresh, jangan blokir startup
@@ -698,24 +730,16 @@ function refreshModelsDevCatalog() {
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(data => {
       modelsDevIndex = buildModelsDevIndex(data);
+      modelsDevReady = true;
       try { fs.writeFileSync(MODELS_DEV_PATH, JSON.stringify(data)); } catch {}
       console.log('[caps] models.dev catalog refreshed:', modelsDevIndex.size, 'models');
     })
     .catch(e => console.log('[caps] models.dev refresh gagal:', e.message))
     .finally(() => clearTimeout(timer));
 }
-(function initModelsDevCatalog() {
-  try {
-    const st = fs.statSync(MODELS_DEV_PATH);
-    if (Date.now() - st.mtimeMs < MODELS_DEV_TTL_MS) {
-      modelsDevIndex = buildModelsDevIndex(JSON.parse(fs.readFileSync(MODELS_DEV_PATH, 'utf8')));
-      console.log('[caps] models.dev catalog loaded:', modelsDevIndex.size, 'models');
-      return;
-    }
-  } catch {}
-  refreshModelsDevCatalog();
-  setInterval(refreshModelsDevCatalog, MODELS_DEV_TTL_MS).unref?.();
-})();
+// startup ringan: tidak parse katalog di awal (lazy saat pertama dipakai);
+// refresh mingguan tetap dijadwalkan
+setInterval(refreshModelsDevCatalog, MODELS_DEV_TTL_MS).unref?.();
 function getModelCaps(fullId) {
   const id = String(fullId || '');
   const bare = id.includes('/') ? id.split('/').pop() : id;
@@ -727,10 +751,12 @@ function getModelCaps(fullId) {
       tools: manual.tools !== false,
     };
   }
-  // layer 2: models.dev catalog (exact id match, bare atau full)
-  if (modelsDevIndex) {
-    const hit = modelsDevIndex.get(bare.toLowerCase()) || modelsDevIndex.get(id.toLowerCase());
-    if (hit) return { vision: hit.vision, reasoning: hit.reasoning, tools: hit.tools };
+  // layer 2: models.dev catalog (exact id match, bare atau full) — lazy + compact
+  const devIdx = ensureModelsDevIndex();
+  if (devIdx) {
+    let bits = devIdx.get(bare.toLowerCase());
+    if (bits === undefined) bits = devIdx.get(id.toLowerCase());
+    if (bits !== undefined) return { vision: !!(bits & 1), reasoning: !!(bits & 2), tools: !!(bits & 4) };
   }
   // layer 3: regex fallback
   const n = (bare + ' ' + id).toLowerCase();
