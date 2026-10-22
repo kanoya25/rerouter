@@ -1519,7 +1519,6 @@ a:hover{text-decoration-color:var(--txt)}
       <dt>base url</dt><dd><input id="conn-base" readonly><button class="ghost" onclick="copyConn('base')">copy</button></dd>
       <dt>api key</dt><dd><input id="conn-key" type="password" readonly><button class="ghost" onclick="toggleConnKey(this)">show</button><button class="ghost" onclick="copyConn('key')">copy</button><button class="ghost" onclick="rotateKey()">rotate</button></dd>
     </dl>
-    <div class="codeblock" id="conn-example"></div>
   </div>
   <div class="card"><h2>Keamanan <span class="tag">password dashboard</span></h2>
     <div class="muted" style="margin-bottom:10px">Password untuk membuka dashboard ini. API tetap pakai API key seperti biasa.</div>
@@ -2569,12 +2568,6 @@ function syncConn() {
   var k = document.getElementById('key').value || '';
   document.getElementById('conn-base').value = location.origin + '/v1';
   document.getElementById('conn-key').value = k;
-  document.getElementById('conn-example').textContent =
-    'from openai import OpenAI\\n' +
-    'client = OpenAI(base_url="' + location.origin + '/v1", api_key="YOUR_API_KEY")\\n' +
-    'r = client.chat.completions.create(model="oc/mimo-v2.6-flash-free",\\n' +
-    '    messages=[{"role": "user", "content": "hi"}])\\n' +
-    'print(r.choices[0].message.content)';
 }
 async function changeDashPass() {
   var k = admKey(); if (!k) return;
