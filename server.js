@@ -1,4 +1,4 @@
-// rerouter — lightweight JS router, 9router-style but minimal.
+// rerouter - lightweight JS router, 9router-style but minimal.
 // Zero deps. Node 22+ (uses node:http, node:sqlite, global fetch).
 // Mirrors server.py behavior: pool of vercel relays -> opencode zen,
 // per-request rotation + failover, OpenAI-compatible.
@@ -140,7 +140,7 @@ function validCustomId(id) {
   return typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,30}$/.test(id) && id !== 'oc';
 }
 
-// provider custom: OpenAI-compatible — base_url + key sendiri, request langsung
+// provider custom: OpenAI-compatible - base_url + key sendiri, request langsung
 // (tanpa relay pool), payload diteruskan apa adanya, cuma model yang di-override.
 function buildProviders() {
   const base = {
@@ -174,7 +174,7 @@ function buildProviders() {
       },
       build_body_fn: (bareModel, payload) => ({ ...payload, model: bareModel }),
       strip_prefix: true,
-      direct: true, // tanpa relay — fetch langsung ke base_url
+      direct: true, // tanpa relay - fetch langsung ke base_url
       custom_id: id,
     };
   }
@@ -207,7 +207,7 @@ function opencodeHeaders() {
 }
 // OpenCode v2 free-tier gate (PR #4860/#4842): request WAJIB declare tools
 // `read` + `shell` dengan definisi persis CLI v2.0.26, dan stream harus true.
-// Definisi jangan diubah — upstream membandingkan description + parameters.
+// Definisi jangan diubah - upstream membandingkan description + parameters.
 const FP_READ_DESC = "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.";
 const FP_READ_PARAMS = { type: 'object', properties: {
   path: { type: 'string', description: 'File or directory to read' },
@@ -409,7 +409,7 @@ function aliasHistoryToolCalls(body, map) {
 
 
 function opencodeBuildBody(model, payload) {
-  // stream:true WAJIB — upstream 403 FreeTierError kalau stream:false
+  // stream:true WAJIB - upstream 403 FreeTierError kalau stream:false
   const body = { model, messages: payload.messages || [], stream: true };
   for (const k of ['max_tokens', 'temperature', 'top_p', 'stop']) {
     if (payload[k] !== undefined && payload[k] !== null) body[k] = payload[k];
@@ -647,9 +647,9 @@ function escHtml(s) {
 
 // ---------------- model capabilities (ala 9router) ----------------
 // Layered detection (first match wins), ala 9router capabilities.js:
-//   1. config.model_caps[id]            — manual override (prioritas tertinggi)
-//   2. models.dev catalog               — 9000+ model, modalities akurat
-//   3. regex fallback                   — tebakan dari nama model
+//   1. config.model_caps[id]            - manual override (prioritas tertinggi)
+//   2. models.dev catalog               - 9000+ model, modalities akurat
+//   3. regex fallback                   - tebakan dari nama model
 // Bisa dioverride manual via config.model_caps = { "id/model": {vision:true,...} }
 const MODELS_DEV_PATH = path.join(__dirname, 'models.dev.json');
 const MODELS_DEV_TTL_MS = 7 * 24 * 3600 * 1000; // refresh mingguan
@@ -1048,7 +1048,7 @@ function rtkCompressMessages(messages) {
 let lastRtkStats = null; // untuk dashboard
 
 // ---------------- caveman: output token saver ----------------
-// Instruksi gaya terse ke system prompt — model menjawab ringkas,
+// Instruksi gaya terse ke system prompt - model menjawab ringkas,
 // menghemat output token. Level: lite < full < ultra.
 const CAVEMAN_PROMPTS = {
   lite: 'Be terse. Use full sentences but drop all filler, hedging and pleasantries. State the thing, the action, the reason. Then the next step.',
@@ -1307,7 +1307,7 @@ const DASHBOARD = `<!doctype html>
   --txt:#18181b; --mut:#5b5b64; --dim:#a1a1aa;
   --acc-dim:rgba(229,72,77,.07);
 }
-html{scroll-behavior:smooth}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--txt);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
 /* ---------- top bar ---------- */
 .hero{background:var(--bg);border-bottom:1px solid var(--line);min-height:0}
@@ -1596,7 +1596,7 @@ a:hover{text-decoration-color:var(--txt)}
   <div class="card"><h2>Speed Test <span class="tag">latency per provider</span></h2>
     <div class="muted" style="margin-bottom:10px">Test model tercepat/stabil tiap provider sebelum ganti model. Prompt kecil, diulang beberapa kali.</div>
     <div class="grid2">
-      <input id="bm-prov" placeholder="provider: oc, jerouter — kosongkan = semua">
+      <input id="bm-prov" placeholder="provider: oc, jerouter - kosongkan = semua">
       <input id="bm-prompt" placeholder="prompt test (default: Balas dengan satu kata: ok)">
     </div>
     <div class="grid2">
@@ -1617,28 +1617,28 @@ a:hover{text-decoration-color:var(--txt)}
     <div class="row"><button class="ghost" onclick="loadProviders()">reload</button></div>
   </div>
   <div class="card"><h2>Tambah Provider</h2>
-    <input id="pv-id" placeholder="id unik, mis. myprov — kosongkan bila base URL sudah terdaftar">
+    <input id="pv-id" placeholder="id unik, mis. myprov - kosongkan bila base URL sudah terdaftar">
     <input id="pv-name" placeholder="nama tampilan (opsional)">
     <input id="pv-base" placeholder="base URL, mis. https://api.contoh.com/v1">
-    <input id="pv-key" type="password" placeholder="API key — bila base URL sudah ada, key digabung ke provider itu ">
-    <input id="pv-models" placeholder="models, pisahkan koma — kosongkan untuk auto-detect dari upstream ">
+    <input id="pv-key" type="password" placeholder="API key - bila base URL sudah ada, key digabung ke provider itu ">
+    <input id="pv-models" placeholder="models, pisahkan koma - kosongkan untuk auto-detect dari upstream ">
     <div class="row"><button class="red" onclick="addProvider()">tambah </button></div>
-    <div class="muted">Base URL tanpa <b>/chat/completions</b> — ditambah otomatis. Provider custom request-nya langsung, tanpa relay pool.</div>
+    <div class="muted">Base URL tanpa <b>/chat/completions</b> - ditambah otomatis. Provider custom request-nya langsung, tanpa relay pool.</div>
   </div>
 </section>
 
 <section class="panel" id="p-fitur">
   <div class="card"><h2>Token Saver <span class="tag">ala 9router RTK</span></h2>
-    <label class="sw"><input type="checkbox" id="ft-rtk"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>RTK</b> — kompres output tool (git diff, grep, ls, build log…) <span class="muted">hemat 20-40% token input</span></span></label>
-    <label class="sw"><input type="checkbox" id="ft-cave"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Caveman</b> — model menjawab super ringkas <span class="muted">hemat output token</span></span></label>
+    <label class="sw"><input type="checkbox" id="ft-rtk"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>RTK</b> - kompres output tool (git diff, grep, ls, build log…) <span class="muted">hemat 20-40% token input</span></span></label>
+    <label class="sw"><input type="checkbox" id="ft-cave"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Caveman</b> - model menjawab super ringkas <span class="muted">hemat output token</span></span></label>
     <div class="row"><select id="ft-cavelvl" style="width:170px;margin:0;flex:none"><option value="lite">caveman: lite</option><option value="full">caveman: full</option><option value="ultra">caveman: ultra</option></select></div>
-    <label class="sw"><input type="checkbox" id="ft-vision"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Vision adaptor</b> — strip gambar untuk model text-only <span class="muted">biar request tidak gagal</span></span></label>
+    <label class="sw"><input type="checkbox" id="ft-vision"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Vision adaptor</b> - strip gambar untuk model text-only <span class="muted">biar request tidak gagal</span></span></label>
     <input id="ft-novision" placeholder="model tanpa vision, pisahkan koma (mis. oc/tiny-model)">
     <div class="row"><button class="red" onclick="saveFeatures()">simpan </button></div>
     <div class="muted" id="ft-rtkstat"></div>
   </div>
   <div class="card"><h2>Combos <span class="tag">combo/nama</span></h2>
-    <div class="muted" style="margin-bottom:10px">Model virtual berisi urutan model asli — otomatis fallback ke berikutnya bila gagal. Dipakai sebagai <b>combo/nama</b>.</div>
+    <div class="muted" style="margin-bottom:10px">Model virtual berisi urutan model asli , otomatis fallback ke berikutnya bila gagal. Dipakai sebagai <b>combo/nama</b>.</div>
     <div id="ft-combos"></div>
     <div class="row"><button class="ghost" onclick="loadFeatures()">reload</button></div>
   </div>
@@ -1654,7 +1654,7 @@ a:hover{text-decoration-color:var(--txt)}
       <div class="row"><button class="ghost" onclick="saveMapF('fb')">simpan</button></div>
     </div>
     <div class="card"><h2>Round-robin <span class="tag">rr/nama</span></h2>
-      <div class="muted" style="margin-bottom:8px">Contoh: {"free": ["oc/a", "oc/b"]} — tiap request giliran berikutnya</div>
+      <div class="muted" style="margin-bottom:8px">Contoh: {"free": ["oc/a", "oc/b"]} - tiap request giliran berikutnya</div>
       <textarea id="ft-rr" rows="5" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px"></textarea>
       <div class="row"><button class="ghost" onclick="saveMapF('rr')">simpan</button></div>
     </div>
@@ -2037,8 +2037,8 @@ async function sendChat() {
       var j = JSON.parse(txt);
       out = r.status === 200
         ? ((j.choices || [{}])[0].message || {}).content || '(kosong)'
-        : ('HTTP ' + r.status + ' — ' + (j.error || txt).toString().slice(0, 300));
-    } catch (e) { out = 'HTTP ' + r.status + ' — ' + txt.slice(0, 300); }
+        : ('HTTP ' + r.status + ' - ' + (j.error || txt).toString().slice(0, 300));
+    } catch (e) { out = 'HTTP ' + r.status + ' - ' + txt.slice(0, 300); }
     typing.classList.remove('typing');
     typing.textContent = out;
     document.getElementById('thread').scrollTop = 1e9;
@@ -2110,7 +2110,7 @@ async function loadRelay() {
         var qs = document.createElement('div');
         qs.className = 'pnm';
         qs.style.fontSize = '12px';
-        qs.textContent = q.url + ' — sisa ' + hrs + 'j ' + mins + 'm (' + q.strikes + 'x kena 429)';
+        qs.textContent = q.url + ' - sisa ' + hrs + 'j ' + mins + 'm (' + q.strikes + 'x kena 429)';
         var cb = document.createElement('button');
         cb.className = 'ghost';
         cb.textContent = 'paksa pulih';
@@ -2218,7 +2218,7 @@ async function loadProviders() {
     var d = await r.json();
     if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
     var list = d.providers || [];
-    if (!list.length) { body.innerHTML = ill('empty-state', 'belum ada custom provider — tambah di bawah '); }
+    if (!list.length) { body.innerHTML = ill('empty-state', 'belum ada custom provider - tambah di bawah '); }
     else {
       body.innerHTML = '';
       list.forEach(function (c) { body.appendChild(provCard(c)); });
@@ -2472,7 +2472,7 @@ async function saveFeatures() {
 function renderCombosF(combos) {
   var box = document.getElementById('ft-combos');
   var names = Object.keys(combos);
-  if (!names.length) { box.innerHTML = '<div class="muted">belum ada combo — tambah di bawah </div>'; return; }
+  if (!names.length) { box.innerHTML = '<div class="muted">belum ada combo, tambah di bawah </div>'; return; }
   box.innerHTML = '';
   names.forEach(function (n) {
     var row = document.createElement('div'); row.className = 'prow';
@@ -2942,7 +2942,7 @@ const server = http.createServer(async (req, res) => {
             detected = models.length;
           }
         } catch {}
-        if (!models.length) { sendJson(res, 400, { error: 'gagal auto-detect models dari upstream — isi manual atau cek base_url/key' }); return; }
+        if (!models.length) { sendJson(res, 400, { error: 'gagal auto-detect models dari upstream - isi manual atau cek base_url/key' }); return; }
       }
       const rec = { id, name, base_url, api_key: keys[0] || '', api_keys: keys, models, enabled: body.enabled !== false };
       const i = config.custom_providers.findIndex(x => String(x.id || '').toLowerCase() === id);
@@ -2973,7 +2973,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, provider: publicProvider(c) });
       return;
     }
-    // POST /admin/providers/:id/keys — tambah API key
+    // POST /admin/providers/:id/keys - tambah API key
     if (req.method === 'POST' && /^\/admin\/providers\/[^/]+\/keys$/.test(p)) {
       if (!needAuth(req, res)) return;
       const c = findCustomProvider(decodeURIComponent(p.split('/')[3]));
@@ -2990,7 +2990,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, provider: publicProvider(c) });
       return;
     }
-    // DELETE /admin/providers/:id/keys/:idx — hapus API key by index
+    // DELETE /admin/providers/:id/keys/:idx - hapus API key by index
     if (req.method === 'DELETE' && /^\/admin\/providers\/[^/]+\/keys\/\d+$/.test(p)) {
       if (!needAuth(req, res)) return;
       const c = findCustomProvider(decodeURIComponent(p.split('/')[3]));
@@ -3004,7 +3004,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, provider: publicProvider(c) });
       return;
     }
-    // POST /admin/providers/:id/models — tambah 1 model
+    // POST /admin/providers/:id/models - tambah 1 model
     if (req.method === 'POST' && /^\/admin\/providers\/[^/]+\/models$/.test(p)) {
       if (!needAuth(req, res)) return;
       const c = findCustomProvider(decodeURIComponent(p.split('/')[3]));
@@ -3020,7 +3020,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, provider: publicProvider(c) });
       return;
     }
-    // DELETE /admin/providers/:id/models/:model — hapus 1 model
+    // DELETE /admin/providers/:id/models/:model - hapus 1 model
     if (req.method === 'DELETE' && /^\/admin\/providers\/[^/]+\/models\/.+$/.test(p)) {
       if (!needAuth(req, res)) return;
       const parts = p.split('/');
@@ -3033,7 +3033,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, provider: publicProvider(c) });
       return;
     }
-    // POST /admin/providers/:id/refresh — tarik ulang daftar model dari upstream /models
+    // POST /admin/providers/:id/refresh - tarik ulang daftar model dari upstream /models
     if (req.method === 'POST' && /^\/admin\/providers\/[^/]+\/refresh$/.test(p)) {
       if (!needAuth(req, res)) return;
       const c = findCustomProvider(decodeURIComponent(p.split('/')[3]));
