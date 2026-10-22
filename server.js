@@ -182,6 +182,21 @@ function buildProviders() {
   return base;
 }
 let PROVIDERS = buildProviders();
+// migrasi sekali: tiap provider dapat mode eksplisit (kunci 'oc' = opencode)
+(function migrateRelayModes() {
+  if (!config.provider_relay || typeof config.provider_relay !== 'object') config.provider_relay = {};
+  const ids = ['oc', ...customProviderDefs().map(c => String(c.id).toLowerCase())];
+  let changed = false;
+  for (const pid of ids) {
+    const cur = config.provider_relay[pid];
+    if (cur === 'random' || cur === 'round-robin' || cur === 'first' || cur === 'direct') continue;
+    const isDirect = pid !== 'oc' && PROVIDERS[pid] && PROVIDERS[pid].direct;
+    config.provider_relay[pid] = isDirect ? 'direct' : STRATEGY;
+    changed = true;
+  }
+  if (config.provider_relay.opencode) { delete config.provider_relay.opencode; changed = true; }
+  if (changed) saveConfig();
+})();
 function rebuildProviders() {
   PROVIDERS = buildProviders();
   modelsCache = { ts: 0, ids: null }; // refresh daftar model
@@ -767,15 +782,16 @@ async function getModelIds() {
   return ids;
 }
 
-// relay mode per provider (ala 9router): 'default' | 'random' | 'round-robin' | 'first' | 'direct'
-// 'default' = opencode pakai pool (strategi global), custom provider direct (perilaku lama)
-const RELAY_MODES = ['default', 'random', 'round-robin', 'first', 'direct'];
+// relay mode per provider (ala 9router: tiap provider strategi sendiri, tanpa global)
+// 'random' | 'round-robin' | 'first' = via pool; 'direct' = tanpa relay
+const RELAY_MODES = ['random', 'round-robin', 'first', 'direct'];
 function providerRelayMode(pname) {
-  const m = String((config.provider_relay && config.provider_relay[pname]) || 'default');
+  const key = pname === 'opencode' ? 'oc' : String(pname).toLowerCase();
+  const m = String((config.provider_relay && config.provider_relay[key]) || '');
   if (m === 'direct' || m === 'random' || m === 'round-robin' || m === 'first') return m;
   const p = PROVIDERS[pname];
   if (p && p.direct) return 'direct';
-  return STRATEGY; // 'random'|'round-robin'|'first'
+  return STRATEGY; // fallback terakhir bila belum termigrasi
 }
 async function upstreamTry(providerName, bareModel, payload) {
   const p = PROVIDERS[providerName];
@@ -1406,7 +1422,7 @@ button.red:hover{border-color:var(--acc);color:var(--acc)}
 /* ---------- relay pool ---------- */
 .prelay{display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}
 .prelay:last-child{border-bottom:none}
-.prelay select{width:auto;flex:none;min-width:130px}
+.prelay select{flex:1;min-width:0}
 .prelay .pnm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12px;display:flex;align-items:center;gap:8px}
 .prelay .peff{color:var(--dim);font-size:11px;font-family:var(--mono);flex:none}
 @media(max-width:640px){
@@ -1604,15 +1620,6 @@ a:hover{text-decoration-color:var(--txt)}
 <section class="panel" id="p-providers">
   <div class="card"><h2>Relay Pool <span class="tag" id="relay-count"></span></h2>
     <div class="muted" style="margin-bottom:12px">Relay dipakai untuk menyamarkan IP egress. Atur strategi per provider ala 9router.</div>
-    <div class="rrow">
-      <span class="rlab">strategi global</span>
-      <select id="relay-global">
-        <option value="random">random</option>
-        <option value="round-robin">round-robin</option>
-        <option value="first">first</option>
-      </select>
-      <button class="ghost" onclick="saveRelayGlobal()">simpan</button>
-    </div>
     <div id="relay-provs" style="margin-top:6px"></div>
     <div id="relay-quar" style="margin-top:10px"></div>
   </div>
@@ -2092,7 +2099,6 @@ async function loadRelay() {
     var d = await r.json();
     if (!r.ok) return;
     document.getElementById('relay-count').textContent = d.pools_active + ' aktif';
-    document.getElementById('relay-global').value = d.global_strategy || 'random';
     var box = document.getElementById('relay-provs');
     box.innerHTML = '';
     (d.providers || []).forEach(function (pv) {
@@ -2107,17 +2113,15 @@ async function loadRelay() {
       tag.textContent = pv.id;
       nm.appendChild(b); nm.appendChild(tag);
       var sel = document.createElement('select');
-      ['default', 'random', 'round-robin', 'first', 'direct'].forEach(function (m) {
+      ['random', 'round-robin', 'first', 'direct'].forEach(function (m) {
         var o = document.createElement('option');
-        o.value = m; o.textContent = m;
+        o.value = m;
+        o.textContent = m;
         if (m === pv.mode) o.selected = true;
         sel.appendChild(o);
       });
       sel.onchange = (function (pid, el) { return function () { saveRelayProv(pid, el.value); }; })(pv.id, sel);
-      var eff = document.createElement('div');
-      eff.className = 'peff';
-      eff.textContent = '→ ' + pv.effective + (pv.effective === 'direct' ? ' (tanpa relay)' : ' (via pool)');
-      row.appendChild(nm); row.appendChild(sel); row.appendChild(eff);
+      row.appendChild(nm); row.appendChild(sel);
       box.appendChild(row);
     });
     // karantina 429: daftar relay yang lagi di-skip 24 jam
@@ -2128,26 +2132,10 @@ async function loadRelay() {
       var qh = document.createElement('div');
       qh.className = 'muted';
       qh.style.marginBottom = '6px';
-      qh.textContent = 'Dikarantina 429 (' + ql.length + ' relay, dipakai lagi otomatis setelah 24 jam):';
+      qh.textContent = 'Dikarantina 429: ' + ql.length + ' relay (pulih otomatis setelah 24 jam)';
       qb.appendChild(qh);
-      ql.forEach(function (q) {
-        var qr = document.createElement('div');
-        qr.className = 'prelay';
-        var hrs = Math.floor(q.remaining_secs / 3600), mins = Math.floor((q.remaining_secs % 3600) / 60);
-        var qs = document.createElement('div');
-        qs.className = 'pnm';
-        qs.style.fontSize = '12px';
-        qs.textContent = q.url + ' - sisa ' + hrs + 'j ' + mins + 'm (' + q.strikes + 'x kena 429)';
-        var cb = document.createElement('button');
-        cb.className = 'ghost';
-        cb.textContent = 'paksa pulih';
-        cb.onclick = (function (u) { return function () { clearQuarantine(u); }; })(q.url);
-        qr.appendChild(qs); qr.appendChild(cb);
-        qb.appendChild(qr);
-      });
       var ca = document.createElement('button');
       ca.className = 'ghost';
-      ca.style.marginTop = '6px';
       ca.textContent = 'pulihkan semua';
       ca.onclick = function () { clearQuarantine('*'); };
       qb.appendChild(ca);
@@ -2162,17 +2150,6 @@ async function clearQuarantine(u) {
     body: JSON.stringify({ clear_quarantine: u }),
   });
   toast(r.ok ? 'karantina dihapus' : 'gagal', r.ok ? 'ok' : 'err');
-  if (r.ok) loadRelay();
-}
-async function saveRelayGlobal() {
-  var k = admKey(); if (!k) return;
-  var s = document.getElementById('relay-global').value;
-  var r = await fetch('/admin/relay', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k },
-    body: JSON.stringify({ global_strategy: s }),
-  });
-  toast(r.ok ? 'strategi global disimpan' : 'gagal simpan', r.ok ? 'ok' : 'err');
   if (r.ok) loadRelay();
 }
 async function saveRelayProv(pid, mode) {
@@ -2431,7 +2408,7 @@ async function addProvider() {
     document.getElementById('pv-key').value = '';
     document.getElementById('pv-models').value = '';
     loaded.providers = false; loaded.models = false;
-    loadProviders(); loadModels();
+    loadProviders(); loadModels(); loadRelay();
     if (d.merged) toast(d.added_keys + ' key digabung ke provider ' + d.provider.id + '  (base URL sama)', 'ok');
     else toast('provider ' + id + ' ditambahkan ' + (d.detected ? ' (' + d.detected + ' model auto-detect)' : ''), 'ok');
   } catch (e) { toast('gagal: ' + e, 'err'); }
@@ -2703,7 +2680,7 @@ async function delProvider(id) {
   if (!confirm('hapus provider ' + id + '?')) return;
   await fetch('/admin/providers/' + encodeURIComponent(id), { method: 'DELETE', headers: { Authorization: 'Bearer ' + k } });
   loaded.providers = false; loaded.models = false;
-  loadProviders(); loadModels();
+  loadProviders(); loadModels(); loadRelay();
   toast('provider ' + id + ' dihapus', 'ok');
 }
 async function testProvider(id) {
@@ -3267,12 +3244,12 @@ const server = http.createServer(async (req, res) => {
         pools_active: activePools().length,
         pools_available: availablePools().length,
         quarantined: quarantineList(),
-        global_strategy: STRATEGY,
-        providers: provs.map(x => ({
-          id: x.id, name: x.name,
-          mode: String((config.provider_relay && config.provider_relay[x.id]) || 'default'),
-          effective: providerRelayMode(x.id),
-        })),
+        providers: provs.map(x => {
+          const pname = x.id === 'oc' ? 'opencode' : x.id;
+          const eff = providerRelayMode(pname);
+          const stored = config.provider_relay && config.provider_relay[x.id];
+          return { id: x.id, name: x.name, mode: stored || eff, effective: eff };
+        }),
       });
       return;
     }
@@ -3280,19 +3257,13 @@ const server = http.createServer(async (req, res) => {
       if (!needAuth(req, res)) return;
       let body;
       try { body = JSON.parse(await readBody(req) || '{}'); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
-      if (body.global_strategy) {
-        const s = String(body.global_strategy);
-        if (!['random', 'round-robin', 'first'].includes(s)) { sendJson(res, 400, { error: 'strategi: random|round-robin|first' }); return; }
-        STRATEGY = s;
-        config.rotate_strategy = s;
-      }
       if (body.provider) {
-        const pid = String(body.provider).toLowerCase();
-        const mode = String(body.mode || 'default');
+        let pid = String(body.provider).toLowerCase();
+        if (pid === 'opencode') pid = 'oc';
+        const mode = String(body.mode || '');
         if (!RELAY_MODES.includes(mode)) { sendJson(res, 400, { error: 'mode: ' + RELAY_MODES.join('|') }); return; }
         if (!config.provider_relay) config.provider_relay = {};
-        if (mode === 'default') delete config.provider_relay[pid];
-        else config.provider_relay[pid] = mode;
+        config.provider_relay[pid] = mode;
       }
       if (body.clear_quarantine) { // url relay spesifik, atau '*' = semua
         const u = String(body.clear_quarantine);
@@ -3300,7 +3271,7 @@ const server = http.createServer(async (req, res) => {
         else clearRelayQuarantine(u);
       }
       saveConfig();
-      sendJson(res, 200, { ok: true, global_strategy: STRATEGY, provider_relay: config.provider_relay });
+      sendJson(res, 200, { ok: true, provider_relay: config.provider_relay });
       return;
     }
     // speed test: ukur latency per model per provider (bantu pilih model tercepat/stabil)
