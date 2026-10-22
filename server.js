@@ -1262,24 +1262,22 @@ const LOGIN_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>rerouter · login</title>
 <style>
-:root{--bg:#0c0a09;--card:#1c1917;--line:#292524;--txt:#e7e5e4;--mut:#a8a29e;--red:#e5484d;--red2:#ff6369}
+:root{--bg:#09090b;--card:#0f0f12;--line:#1e1e22;--txt:#e4e4e7;--dim:#5b5b64;--acc:#e5484d;--r:6px;--mono:ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--txt);font-family:ui-sans-serif,system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:36px 32px;width:100%;max-width:380px;text-align:center}
-.ava{width:96px;height:96px;border-radius:50%;object-fit:cover;border:2px solid var(--red);margin-bottom:12px}
-h1{font-size:24px;margin-bottom:4px}
-h1 b{color:var(--red2)}
-.sub{color:var(--mut);font-size:13px;margin-bottom:24px}
-input{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:12px;color:var(--txt);padding:13px 15px;font-size:15px;margin-bottom:12px;outline:none}
-input:focus{border-color:var(--red)}
-button{width:100%;background:var(--red);border:none;border-radius:12px;color:#fff;padding:13px;font-size:15px;font-weight:700;cursor:pointer}
-button:hover{background:var(--red2)}
-.err{background:rgba(229,72,77,.12);border:1px solid var(--red);color:var(--red2);border-radius:12px;padding:10px 14px;font-size:13px;margin-bottom:14px}
-.hint{color:var(--mut);font-size:12px;margin-top:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:28px 24px;width:100%;max-width:340px}
+h1{font-size:15px;font-family:var(--mono);font-weight:700;margin-bottom:4px}
+h1 b{color:var(--txt);font-weight:700}
+.sub{color:var(--dim);font-size:12px;font-family:var(--mono);margin-bottom:20px}
+input{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:var(--r);color:var(--txt);padding:10px 12px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit}
+input:focus{border-color:var(--dim)}
+button{width:100%;background:transparent;border:1px solid var(--line);border-radius:var(--r);color:var(--txt);padding:10px;font-size:12px;font-family:var(--mono);cursor:pointer}
+button:hover{border-color:var(--dim)}
+.err{border:1px solid var(--acc);color:var(--acc);border-radius:var(--r);padding:9px 12px;font-size:12px;font-family:var(--mono);margin-bottom:12px}
+.hint{color:var(--dim);font-size:11px;font-family:var(--mono);margin-top:14px}
 </style></head><body>
 <div class="card">
-<img class="ava" src="/ref/avatar.jpg" alt="reze">
-<h1>rero<b>u</b>ter</h1>
+<h1>rerouter</h1>
 <div class="sub">masukkan password dashboard</div>
 __ERR__
 <form method="POST" action="/login">
@@ -2179,7 +2177,7 @@ async function runBenchmark() {  var k = admKey(); if (!k) return;
     if (!r.ok) { out.innerHTML = '<div class="err">gagal: ' + esc(d.error || r.status) + '</div>'; return; }
     var rows = (d.results || []).map(function (x, i) {
       var rate = Math.round(100 * x.ok / x.runs);
-      var badge = i === 0 && x.ok ? ' 🥇' : '';
+      var badge = i === 0 && x.ok ? ' <span class="cbadge">best</span>' : '';
       var lat = x.avg_ms == null ? '<span class="muted">fail</span>' :
         '<b>' + x.avg_ms + ' ms</b> <span class="muted">(' + x.min_ms + '–' + x.max_ms + ')</span>';
       return '<tr><td>' + (i + 1) + badge + '</td>' +
