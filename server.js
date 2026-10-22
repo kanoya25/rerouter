@@ -1398,9 +1398,15 @@ button.red:hover{border-color:var(--acc);color:var(--acc)}
 /* ---------- relay pool ---------- */
 .prelay{display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}
 .prelay:last-child{border-bottom:none}
-.prelay select{width:auto;flex:none}
-.prelay .pnm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12px}
+.prelay select{width:auto;flex:none;min-width:130px}
+.prelay .pnm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12px;display:flex;align-items:center;gap:8px}
 .prelay .peff{color:var(--dim);font-size:11px;font-family:var(--mono);flex:none}
+@media(max-width:640px){
+  .prelay{flex-wrap:wrap;gap:8px}
+  .prelay .pnm{flex:1 1 100%;white-space:normal;overflow:visible}
+  .prelay select{flex:1;min-width:0}
+  .prelay .peff{flex:none}
+}
 /* ---------- playground ---------- */
 .thread{display:flex;flex-direction:column;gap:10px;max-height:420px;overflow-y:auto;margin-bottom:12px}
 .msg{max-width:85%;padding:9px 12px;border-radius:var(--r);font-size:13px;line-height:1.55;border:1px solid var(--line)}
@@ -1445,8 +1451,12 @@ a:hover{text-decoration-color:var(--txt)}
 .segrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .seg{appearance:none;border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:var(--r);padding:6px 12px;font-size:12px;font-family:var(--mono);cursor:pointer}
 .seg.on{color:var(--txt);border-color:var(--dim);background:var(--card2)}
+.seg.ic{display:inline-flex;align-items:center;justify-content:center;min-width:34px;padding:6px 10px}
+.seg.ic svg{display:block}
 .seg:hover{color:var(--txt)}
-.cbadge{display:inline-block;font-size:10px;font-family:var(--mono);color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:2px 7px;margin:2px 4px 2px 0;letter-spacing:.04em;text-transform:uppercase}
+.cbadge{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;color:var(--dim);border:1px solid var(--line);border-radius:6px;margin:2px 5px 2px 0;vertical-align:middle;flex:none}
+.cbadge svg{display:block}
+.cbadge.t{width:auto;height:auto;font-size:10px;font-family:var(--mono);padding:2px 7px;letter-spacing:.04em;text-transform:uppercase}
 /* switch toggle ala 9router */
 .sw{display:flex;align-items:center;gap:11px;margin-bottom:12px;font-size:13px;cursor:pointer;user-select:none}
 .sw input{position:absolute;opacity:0;pointer-events:none}
@@ -1543,8 +1553,8 @@ a:hover{text-decoration-color:var(--txt)}
     <div class="searchbar"><input id="modelq" placeholder="cari model…" oninput="filterModels()"></div>
     <div class="segrow" id="capfilter" style="margin-bottom:12px">
       <button class="seg on" data-cap="">semua</button>
-      <button class="seg" data-cap="vision">vision</button>
-      <button class="seg" data-cap="reasoning">thinking</button>
+      <button class="seg ic" data-cap="vision" title="vision"></button>
+      <button class="seg ic" data-cap="reasoning" title="thinking"></button>
       <button class="seg" data-cap="tools">tools</button>
     </div>
     <div id="models-body">
@@ -1701,6 +1711,14 @@ function toggleTheme() {
   applyTheme(cur === 'dark' ? 'light' : 'dark');
 }
 try { applyTheme(localStorage.getItem('rr_theme') || 'dark'); } catch (e) { applyTheme('dark'); }
+// ikon minimalist capability (stroke SVG 13px)
+var ICON_EYE = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.8 8S4.2 4 8 4s6.2 4 6.2 4-2.4 4-6.2 4S1.8 8 1.8 8Z"/><circle cx="8" cy="8" r="1.8"/></svg>';
+var ICON_THINK = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="3.6" cy="4" r="1.6"/><circle cx="12.4" cy="5.6" r="1.6"/><circle cx="7" cy="12" r="1.6"/><path d="M5.1 4.4l5.6 1M4.3 5.4l2 4.8M11.3 6.8l-3.1 3.5"/></svg>';
+// isi ikon ke tombol filter
+try {
+  document.querySelector('.seg[data-cap="vision"]').innerHTML = ICON_EYE;
+  document.querySelector('.seg[data-cap="reasoning"]').innerHTML = ICON_THINK;
+} catch (e) {}
 // ---- tabs ----
 var tabs = document.querySelectorAll('.tab');
 var loaded = { models: false, usage: false, providers: false, fitur: false };
@@ -1874,10 +1892,10 @@ function renderModels(q) {
       pb.textContent = prov;
       var tx = document.createElement('span');
       tx.textContent = name;
-      // badge capability ala 9router
+      // badge capability: ikon minimalist (eye = vision, nodes = thinking)
       var caps = x.caps || {};
-      if (caps.vision) { var b1 = document.createElement('span'); b1.className = 'cbadge'; b1.textContent = 'vision'; chip.appendChild(b1); }
-      if (caps.reasoning) { var b2 = document.createElement('span'); b2.className = 'cbadge'; b2.textContent = 'thinking'; chip.appendChild(b2); }
+      if (caps.vision) { var b1 = document.createElement('span'); b1.className = 'cbadge'; b1.title = 'vision'; b1.innerHTML = ICON_EYE; chip.appendChild(b1); }
+      if (caps.reasoning) { var b2 = document.createElement('span'); b2.className = 'cbadge'; b2.title = 'thinking'; b2.innerHTML = ICON_THINK; chip.appendChild(b2); }
       var cp = document.createElement('i');
       cp.className = 'cp';
       cp.title = 'copy model id';
@@ -2181,7 +2199,7 @@ async function runBenchmark() {  var k = admKey(); if (!k) return;
     if (!r.ok) { out.innerHTML = '<div class="err">gagal: ' + esc(d.error || r.status) + '</div>'; return; }
     var rows = (d.results || []).map(function (x, i) {
       var rate = Math.round(100 * x.ok / x.runs);
-      var badge = i === 0 && x.ok ? ' <span class="cbadge">best</span>' : '';
+      var badge = i === 0 && x.ok ? ' <span class="cbadge t">best</span>' : '';
       var lat = x.avg_ms == null ? '<span class="muted">fail</span>' :
         '<b>' + x.avg_ms + ' ms</b> <span class="muted">(' + x.min_ms + '–' + x.max_ms + ')</span>';
       return '<tr><td>' + (i + 1) + badge + '</td>' +
