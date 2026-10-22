@@ -1652,10 +1652,10 @@ a:hover{text-decoration-color:var(--txt)}
 
 <section class="panel" id="p-fitur">
   <div class="card"><h2>Token Saver <span class="tag">RTK</span></h2>
-    <label class="sw"><input type="checkbox" id="ft-rtk"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>RTK</b> - kompres output tool (git diff, grep, ls, build log…) <span class="muted">hemat 20-40% token input</span></span></label>
-    <label class="sw"><input type="checkbox" id="ft-cave"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Caveman</b> - model menjawab super ringkas <span class="muted">hemat output token</span></span></label>
-    <div class="row"><select id="ft-cavelvl" style="width:170px;margin:0;flex:none"><option value="lite">caveman: lite</option><option value="full">caveman: full</option><option value="ultra">caveman: ultra</option></select></div>
-    <label class="sw"><input type="checkbox" id="ft-vision"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Vision adaptor</b> - strip gambar untuk model text-only <span class="muted">biar request tidak gagal</span></span></label>
+    <label class="sw"><input type="checkbox" id="ft-rtk" onchange="saveToggleF('rtk_enabled', this.checked)"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>RTK</b> - kompres output tool (git diff, grep, ls, build log…) <span class="muted">hemat 20-40% token input</span></span></label>
+    <label class="sw"><input type="checkbox" id="ft-cave" onchange="saveToggleF('caveman_enabled', this.checked)"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Caveman</b> - model menjawab super ringkas <span class="muted">hemat output token</span></span></label>
+    <div class="row"><select id="ft-cavelvl" style="width:170px;margin:0;flex:none" onchange="saveToggleF('caveman_level', this.value)"><option value="lite">caveman: lite</option><option value="full">caveman: full</option><option value="ultra">caveman: ultra</option></select></div>
+    <label class="sw"><input type="checkbox" id="ft-vision" onchange="saveToggleF('vision_strip', this.checked)"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Vision adaptor</b> - strip gambar untuk model text-only <span class="muted">biar request tidak gagal</span></span></label>
     <div class="muted" style="margin:8px 0 6px">model text-only (tanpa vision), gambar di-strip biar request tidak gagal:</div>
     <input id="ft-novision-q" placeholder="cari model..." oninput="renderNoVisionPicker()" style="margin-bottom:6px">
     <div id="ft-novision-list" class="pickchips"></div>
@@ -1677,18 +1677,6 @@ a:hover{text-decoration-color:var(--txt)}
     <input id="ft-combo-q" placeholder="cari model..." oninput="renderComboPicker()" style="margin-top:6px">
     <div id="ft-combo-list" class="pickchips" style="margin-top:6px"></div>
     <div class="row"><button class="red" onclick="addComboF()">tambah</button></div>
-  </div>
-  <div class="grid2">
-    <div class="card"><h2>Fallbacks <span class="tag">JSON</span></h2>
-      <div class="muted" style="margin-bottom:8px">Contoh: {"oc/model-a": ["oc/model-b"]}</div>
-      <textarea id="ft-fb" rows="5" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px"></textarea>
-      <div class="row"><button class="ghost" onclick="saveMapF('fb')">simpan</button></div>
-    </div>
-    <div class="card"><h2>Round-robin <span class="tag">rr/nama</span></h2>
-      <div class="muted" style="margin-bottom:8px">Contoh: {"free": ["oc/a", "oc/b"]} - tiap request giliran berikutnya</div>
-      <textarea id="ft-rr" rows="5" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px"></textarea>
-      <div class="row"><button class="ghost" onclick="saveMapF('rr')">simpan</button></div>
-    </div>
   </div>
 </section>
 
@@ -2489,8 +2477,6 @@ async function loadFeatures() {
     document.getElementById('ft-rtkstat').textContent = lr
       ? ('RTK terakhir: hemat ' + (lr.before - lr.after) + 'B dari ' + lr.before + 'B via ' + lr.hits.join(', ') + ' @ ' + lr.model)
       : 'belum ada request yang terkompres RTK';
-    document.getElementById('ft-fb').value = JSON.stringify(d.fallbacks || {}, null, 2);
-    document.getElementById('ft-rr').value = JSON.stringify(d.round_robin || {}, null, 2);
     renderCombosF(d.combos || {}, d.combo_strategy || {});
     window._comboSel = [];
     window._comboProv = '';
@@ -2615,6 +2601,17 @@ async function moveComboModel(n, idx, dir) {
     if (r.ok) loadFeatures();
   } catch (e) { toast('gagal: ' + e, 'err'); }
 }
+async function saveToggleF(field, value) {
+  var k = admKey(); if (!k) return;
+  try {
+    var body = {}; body[field] = value;
+    var r = await fetch('/admin/features', { method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k },
+      body: JSON.stringify(body) });
+    if (r.ok) toast('tersimpan', 'ok');
+    else toast('gagal menyimpan', 'err');
+  } catch (e) { toast('gagal: ' + e, 'err'); }
+}
 async function saveFeatures() {
   var k = admKey(); if (!k) return;
   var body = {
@@ -2699,22 +2696,7 @@ async function delComboF(n) {
     toast('combo ' + n + ' dihapus', 'ok');
   } catch (e) { toast('gagal: ' + e, 'err'); }
 }
-async function saveMapF(kind) {
-  var k = admKey(); if (!k) return;
-  var ta = document.getElementById(kind === 'fb' ? 'ft-fb' : 'ft-rr');
-  var obj;
-  try { obj = JSON.parse(ta.value || '{}'); } catch (e) { toast('JSON tidak valid', 'err'); return; }
-  try {
-    var r = await fetch(kind === 'fb' ? '/admin/fallbacks' : '/admin/round-robin', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k },
-      body: JSON.stringify(kind === 'fb' ? { fallbacks: obj } : { pools: obj })
-    });
-    var d = await r.json().catch(function () { return {}; });
-    if (r.ok) { loaded.models = false; loadModels(); toast('tersimpan ', 'ok'); }
-    else toast('gagal: ' + (d.error || r.status), 'err');
-  } catch (e) { toast('gagal: ' + e, 'err'); }
-}
+
 async function delProvider(id) {
   var k = admKey(); if (!k) return;
   if (!confirm('hapus provider ' + id + '?')) return;
