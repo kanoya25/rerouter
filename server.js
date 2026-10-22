@@ -1473,7 +1473,7 @@ a:hover{text-decoration-color:var(--txt)}
 .cbadge.t{width:auto;height:auto;font-size:10px;font-family:var(--mono);padding:2px 7px;letter-spacing:.04em;text-transform:uppercase}
 /* switch toggle ala 9router */
 .sw{display:flex;align-items:center;gap:11px;margin-bottom:12px;font-size:13px;cursor:pointer;user-select:none}
-.sw input{position:absolute;opacity:0;pointer-events:none}
+.sw input{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
 .sw-track{width:36px;height:20px;border-radius:999px;background:var(--card2);border:1px solid var(--line);position:relative;flex:none;transition:background .18s,border-color .18s}
 .sw-thumb{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dim);transition:transform .18s,background .18s}
 .sw input:checked + .sw-track{background:var(--acc-dim);border-color:var(--acc)}
@@ -2636,8 +2636,9 @@ function renderCombosF(combos, strategies) {
     var card = document.createElement('div');
     card.style.cssText = 'border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:8px';
     var head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px';
-    var b = document.createElement('b'); b.textContent = 'combo/' + n; b.style.fontFamily = 'var(--mono)';
+    head.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap';
+    var b = document.createElement('b'); b.textContent = 'combo/' + n;
+    b.style.cssText = 'font-family:var(--mono);min-width:0;flex:1 1 120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     var strat = document.createElement('select');
     strat.style.cssText = 'width:auto;margin:0;flex:none;font-size:11.5px;padding:5px 8px';
     ['fallback', 'round-robin'].forEach(function (s) {
