@@ -1345,9 +1345,11 @@ body{margin:0;background:var(--bg);color:var(--txt);font-family:ui-sans-serif,sy
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:640px){.grid2{grid-template-columns:1fr}}
 /* ---------- stats ---------- */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
-@media(max-width:640px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+@media(max-width:640px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;position:relative}
+.stat{min-width:0;overflow:hidden}
+.stat .v{overflow-wrap:anywhere}
 .stat::after{display:none}
 .stat .k{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-family:var(--mono)}
 .stat .v{font-size:22px;font-weight:600;font-family:var(--mono);margin-top:4px;color:var(--txt)}
@@ -1413,11 +1415,12 @@ button.red:hover{border-color:var(--acc);color:var(--acc)}
 .ill{display:flex;flex-direction:column;align-items:center;gap:8px;padding:24px 0;color:var(--dim)}
 .ill img{width:72px;height:72px;object-fit:cover;border-radius:var(--r);opacity:.5;filter:grayscale(1)}
 .ill .cap{font-size:12px;font-family:var(--mono)}
-.kv{display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center;margin:0}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px 12px;align-items:center;margin:0}
+.kv dd{min-width:0}
 .kv dt{font-size:11px;color:var(--dim);font-family:var(--mono);text-transform:uppercase;letter-spacing:.06em}
 .kv dd{margin:0;display:flex;gap:8px}
 .kv dd input{flex:1}
-.codeblock{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:12px;font-family:var(--mono);font-size:12px;color:var(--mut);white-space:pre-wrap;word-break:break-all;margin-top:10px}
+.codeblock{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:12px;font-family:var(--mono);font-size:12px;color:var(--mut);white-space:pre;word-break:normal;overflow-x:auto;margin-top:10px}
 @media(max-width:640px){
   .kv{grid-template-columns:1fr;gap:4px}
   .kv dd{flex-wrap:wrap}
@@ -1710,6 +1713,7 @@ tabs.forEach(function (t) {
     document.querySelectorAll('.panel').forEach(function (x) { x.classList.remove('active'); });
     t.classList.add('active');
     document.getElementById('p-' + t.getAttribute('data-tab')).classList.add('active');
+    try { t.scrollIntoView({inline:'center',block:'nearest',behavior:'smooth'}); } catch (e) {}
     var name = t.getAttribute('data-tab');
     if (name === 'models' && !loaded.models) loadModels();
     if (name === 'usage' && !loaded.usage) loadUsage();
