@@ -63,6 +63,7 @@ function applyFeatureDefaults() {
   config.vision_strip = config.vision_strip !== false; // default ON: aman untuk model text-only
   config.no_vision_models = normStrArr(config.no_vision_models);
   config.combos = normModelMap(config.combos);
+  if (!config.combo_strategy || typeof config.combo_strategy !== 'object') config.combo_strategy = {};
   config.fallbacks = normModelMap(config.fallbacks);
   config.round_robin = normModelMap(config.round_robin);
   if (!config.provider_relay || typeof config.provider_relay !== 'object') config.provider_relay = {};
@@ -1125,6 +1126,7 @@ async function getVersionInfo() {
 // rr/<name>     -> round-robin: tiap request giliran model berikutnya
 // <model>       -> model + config.fallbacks[model] bila gagal
 const rrCursor = {};
+const comboCursor = {};
 function dedupeModels(list) {
   const seen = new Set(), out = [];
   for (const m of list) {
@@ -1138,7 +1140,13 @@ function resolveCandidates(modelId) {
     const name = modelId.slice(6).trim();
     const list = config.combos[name];
     if (!list || !list.length) { const e = new Error('combo not found: ' + name); e.status = 404; throw e; }
-    return dedupeModels(list.filter(m => !m.startsWith('combo/') && !m.startsWith('rr/'))).slice(0, 6);
+    const clean = dedupeModels(list.filter(m => !m.startsWith('combo/') && !m.startsWith('rr/')));
+    if (config.combo_strategy[name] === 'round-robin' && clean.length > 1) {
+      const i = (comboCursor[name] || 0) % clean.length;
+      comboCursor[name] = (comboCursor[name] || 0) + 1;
+      return [...clean.slice(i), ...clean.slice(0, i)].slice(0, 6);
+    }
+    return clean.slice(0, 6);
   }
   if (modelId.startsWith('rr/')) {
     const name = modelId.slice(3).trim();
@@ -1452,6 +1460,12 @@ a:hover{text-decoration-color:var(--txt)}
 .seg{appearance:none;border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:var(--r);padding:6px 12px;font-size:12px;font-family:var(--mono);cursor:pointer}
 .seg.on{color:var(--txt);border-color:var(--dim);background:var(--card2)}
 .seg.ic{display:inline-flex;align-items:center;justify-content:center;min-width:34px;padding:6px 10px}
+.pickchips{display:flex;flex-wrap:wrap;gap:6px;max-height:190px;overflow-y:auto;padding:2px}
+.pchip{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-family:var(--mono);color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:5px 11px;cursor:pointer;user-select:none;transition:border-color .15s,color .15s,background .15s;max-width:100%}
+.pchip:hover{border-color:var(--dim);color:var(--txt)}
+.pchip.on{color:var(--txt);border-color:var(--acc);background:var(--acc-dim)}
+.pchip .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip .cbadge{margin:0;border:none;width:auto;height:auto}
 .seg.ic svg{display:block}
 .seg:hover{color:var(--txt)}
 .cbadge{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;color:var(--dim);border:1px solid var(--line);border-radius:6px;margin:2px 5px 2px 0;vertical-align:middle;flex:none}
@@ -1637,12 +1651,14 @@ a:hover{text-decoration-color:var(--txt)}
 </section>
 
 <section class="panel" id="p-fitur">
-  <div class="card"><h2>Token Saver <span class="tag">ala 9router RTK</span></h2>
+  <div class="card"><h2>Token Saver <span class="tag">RTK</span></h2>
     <label class="sw"><input type="checkbox" id="ft-rtk"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>RTK</b> - kompres output tool (git diff, grep, ls, build log…) <span class="muted">hemat 20-40% token input</span></span></label>
     <label class="sw"><input type="checkbox" id="ft-cave"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Caveman</b> - model menjawab super ringkas <span class="muted">hemat output token</span></span></label>
     <div class="row"><select id="ft-cavelvl" style="width:170px;margin:0;flex:none"><option value="lite">caveman: lite</option><option value="full">caveman: full</option><option value="ultra">caveman: ultra</option></select></div>
     <label class="sw"><input type="checkbox" id="ft-vision"><span class="sw-track"><span class="sw-thumb"></span></span><span class="sw-txt"><b>Vision adaptor</b> - strip gambar untuk model text-only <span class="muted">biar request tidak gagal</span></span></label>
-    <input id="ft-novision" placeholder="model tanpa vision, pisahkan koma (mis. oc/tiny-model)">
+    <div class="muted" style="margin:8px 0 6px">model text-only (tanpa vision), gambar di-strip biar request tidak gagal:</div>
+    <input id="ft-novision-q" placeholder="cari model..." oninput="renderNoVisionPicker()" style="margin-bottom:6px">
+    <div id="ft-novision-list" class="pickchips"></div>
     <div class="row"><button class="red" onclick="saveFeatures()">simpan </button></div>
     <div class="muted" id="ft-rtkstat"></div>
   </div>
@@ -1653,8 +1669,14 @@ a:hover{text-decoration-color:var(--txt)}
   </div>
   <div class="card"><h2>Tambah Combo</h2>
     <input id="ft-cname" placeholder="nama combo, mis. coding">
-    <input id="ft-cmodels" placeholder="models, pisahkan koma: oc/model-a, oc/model-b">
-    <div class="row"><button class="red" onclick="addComboF()">tambah </button></div>
+    <div class="row" style="align-items:center">
+      <span class="muted">strategi</span>
+      <select id="ft-cstrat" style="width:170px;margin:0;flex:none"><option value="fallback">fallback (urut)</option><option value="round-robin">round-robin (giliran)</option></select>
+    </div>
+    <div id="ft-combo-provs" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+    <input id="ft-combo-q" placeholder="cari model..." oninput="renderComboPicker()" style="margin-top:6px">
+    <div id="ft-combo-list" class="pickchips" style="margin-top:6px"></div>
+    <div class="row"><button class="red" onclick="addComboF()">tambah</button></div>
   </div>
   <div class="grid2">
     <div class="card"><h2>Fallbacks <span class="tag">JSON</span></h2>
@@ -2461,16 +2483,137 @@ async function loadFeatures() {
     document.getElementById('ft-cave').checked = !!d.caveman_enabled;
     document.getElementById('ft-cavelvl').value = d.caveman_level || 'full';
     document.getElementById('ft-vision').checked = !!d.vision_strip;
-    document.getElementById('ft-novision').value = (d.no_vision_models || []).join(', ');
+    window._novisionSel = d.no_vision_models || [];
+    await renderNoVisionPicker();
     var lr = d.last_rtk;
     document.getElementById('ft-rtkstat').textContent = lr
       ? ('RTK terakhir: hemat ' + (lr.before - lr.after) + 'B dari ' + lr.before + 'B via ' + lr.hits.join(', ') + ' @ ' + lr.model)
       : 'belum ada request yang terkompres RTK';
     document.getElementById('ft-fb').value = JSON.stringify(d.fallbacks || {}, null, 2);
     document.getElementById('ft-rr').value = JSON.stringify(d.round_robin || {}, null, 2);
-    renderCombosF(d.combos || {});
+    renderCombosF(d.combos || {}, d.combo_strategy || {});
+    window._comboSel = [];
+    window._comboProv = '';
+    await renderComboPicker();
     loaded.fitur = true;
   } catch (e) { toast('gagal load fitur: ' + e, 'err'); }
+}
+// picker model text-only: chip toggle minimalist
+async function ensureAllModels() {
+  if (window.allModels && window.allModels.length) return;
+  try {
+    var m = await (await fetch('/v1/models')).json();
+    window.allModels = (m.data || []).map(function (x) { return { id: x.id, caps: x.caps || {} }; });
+  } catch (e) { window.allModels = []; }
+}
+function novisionToggle(id, el) {
+  var sel = window._novisionSel || [];
+  var i = sel.indexOf(id);
+  if (i >= 0) { sel.splice(i, 1); el.classList.remove('on'); }
+  else { sel.push(id); el.classList.add('on'); }
+  window._novisionSel = sel;
+}
+async function renderNoVisionPicker() {
+  await ensureAllModels();
+  var box = document.getElementById('ft-novision-list');
+  if (!box) return;
+  var q = (document.getElementById('ft-novision-q').value || '').toLowerCase();
+  var sel = window._novisionSel || [];
+  var list = window.allModels.filter(function (x) { return x.id.indexOf('combo/') !== 0 && x.id.indexOf('rr/') !== 0 && (!q || x.id.toLowerCase().indexOf(q) >= 0); });
+  list.sort(function (a, b) {
+    var av = !(a.caps && a.caps.vision), bv = !(b.caps && b.caps.vision);
+    return (bv - av) || (a.id < b.id ? -1 : 1);
+  });
+  box.innerHTML = '';
+  if (!list.length) { box.innerHTML = '<div class="muted" style="padding:8px">tidak ada model cocok</div>'; return; }
+  list.forEach(function (x) {
+    var c = document.createElement('span');
+    c.className = 'pchip' + (sel.indexOf(x.id) >= 0 ? ' on' : '');
+    c.title = x.id + ' (klik untuk pilih)';
+    var pn = document.createElement('span'); pn.className = 'pn'; pn.textContent = x.id;
+    c.appendChild(pn);
+    if (x.caps && x.caps.vision) { var e = document.createElement('span'); e.className = 'cbadge'; e.title = 'vision'; e.innerHTML = ICON_EYE; c.appendChild(e); }
+    if (x.caps && x.caps.reasoning) { var t = document.createElement('span'); t.className = 'cbadge'; t.title = 'thinking'; t.innerHTML = ICON_THINK; c.appendChild(t); }
+    c.onclick = (function (id, el) { return function () { novisionToggle(id, el); }; })(x.id, c);
+    box.appendChild(c);
+  });
+}
+// picker tambah combo: chip toggle berurutan (urutan klik = urutan fallback)
+function comboToggle(id, el) {
+  var sel = window._comboSel || [];
+  var i = sel.indexOf(id);
+  if (i >= 0) { sel.splice(i, 1); }
+  else { sel.push(id); }
+  window._comboSel = sel;
+  renderComboPicker();
+}
+function comboProvOf(id) { var i = id.indexOf('/'); return i > 0 ? id.slice(0, i) : id; }
+function renderComboProvs() {
+  var box = document.getElementById('ft-combo-provs');
+  if (!box) return;
+  var provs = [];
+  (window.allModels || []).forEach(function (x) {
+    if (x.id.indexOf('combo/') === 0 || x.id.indexOf('rr/') === 0) return;
+    var p = comboProvOf(x.id);
+    if (provs.indexOf(p) < 0) provs.push(p);
+  });
+  provs.sort();
+  box.innerHTML = '';
+  var cur = window._comboProv || '';
+  var mk = function (label, val) {
+    var b = document.createElement('button');
+    b.className = 'seg' + (cur === val ? ' on' : '');
+    b.textContent = label;
+    b.onclick = function () { window._comboProv = val; renderComboProvs(); renderComboPicker(); };
+    box.appendChild(b);
+  };
+  mk('semua', '');
+  provs.forEach(function (p) { mk(p, p); });
+}
+async function renderComboPicker() {
+  await ensureAllModels();
+  renderComboProvs();
+  var box = document.getElementById('ft-combo-list');
+  if (!box) return;
+  var q = (document.getElementById('ft-combo-q').value || '').toLowerCase();
+  var pv = window._comboProv || '';
+  var sel = window._comboSel || [];
+  var list = window.allModels.filter(function (x) { return x.id.indexOf('combo/') !== 0 && x.id.indexOf('rr/') !== 0 && (!pv || comboProvOf(x.id) === pv) && (!q || x.id.toLowerCase().indexOf(q) >= 0); });
+  box.innerHTML = '';
+  if (!list.length) { box.innerHTML = '<div class="muted" style="padding:8px">tidak ada model cocok</div>'; return; }
+  list.forEach(function (x) {
+    var idx = sel.indexOf(x.id);
+    var c = document.createElement('span');
+    c.className = 'pchip' + (idx >= 0 ? ' on' : '');
+    c.title = x.id + (idx >= 0 ? ' (urutan ' + (idx + 1) + ', klik untuk hapus)' : ' (klik untuk tambah)');
+    var pn = document.createElement('span'); pn.className = 'pn';
+    pn.textContent = (idx >= 0 ? (idx + 1) + '. ' : '') + x.id;
+    c.appendChild(pn);
+    if (x.caps && x.caps.vision) { var e = document.createElement('span'); e.className = 'cbadge'; e.title = 'vision'; e.innerHTML = ICON_EYE; c.appendChild(e); }
+    if (x.caps && x.caps.reasoning) { var t = document.createElement('span'); t.className = 'cbadge'; t.title = 'thinking'; t.innerHTML = ICON_THINK; c.appendChild(t); }
+    c.onclick = (function (id, el) { return function () { comboToggle(id, el); }; })(x.id, c);
+    box.appendChild(c);
+  });
+}
+async function setComboStrategy(n, strat) {
+  var k = admKey(); if (!k) return;
+  try {
+    var r = await fetch('/admin/combos/' + encodeURIComponent(n), { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k }, body: JSON.stringify({ strategy: strat }) });
+    toast(r.ok ? 'strategi combo disimpan' : 'gagal simpan', r.ok ? 'ok' : 'err');
+    if (r.ok) loadFeatures();
+  } catch (e) { toast('gagal: ' + e, 'err'); }
+}
+async function moveComboModel(n, idx, dir) {
+  var k = admKey(); if (!k) return;
+  try {
+    var d = await (await fetch('/admin/features', { headers: { Authorization: 'Bearer ' + k } })).json();
+    var arr = (d.combos || {})[n] || [];
+    var j = idx + dir;
+    if (j < 0 || j >= arr.length) return;
+    var tmp = arr[idx]; arr[idx] = arr[j]; arr[j] = tmp;
+    var r = await fetch('/admin/combos/' + encodeURIComponent(n), { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k }, body: JSON.stringify({ models: arr }) });
+    if (r.ok) loadFeatures();
+  } catch (e) { toast('gagal: ' + e, 'err'); }
 }
 async function saveFeatures() {
   var k = admKey(); if (!k) return;
@@ -2479,42 +2622,68 @@ async function saveFeatures() {
     caveman_enabled: document.getElementById('ft-cave').checked,
     caveman_level: document.getElementById('ft-cavelvl').value,
     vision_strip: document.getElementById('ft-vision').checked,
-    no_vision_models: document.getElementById('ft-novision').value.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+    no_vision_models: (window._novisionSel || []).slice()
   };
   try {
     var r = await fetch('/admin/features', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k }, body: JSON.stringify(body) });
     toast(r.ok ? 'fitur disimpan ' : 'gagal simpan', r.ok ? 'ok' : 'err');
   } catch (e) { toast('gagal: ' + e, 'err'); }
 }
-function renderCombosF(combos) {
+function renderCombosF(combos, strategies) {
+  strategies = strategies || {};
   var box = document.getElementById('ft-combos');
   var names = Object.keys(combos);
   if (!names.length) { box.innerHTML = '<div class="muted">belum ada combo, tambah di bawah </div>'; return; }
   box.innerHTML = '';
   names.forEach(function (n) {
-    var row = document.createElement('div'); row.className = 'prow';
-    var info = document.createElement('div');
-    var b = document.createElement('b'); b.textContent = 'combo/' + n;
-    var br = document.createElement('br');
-    var sm = document.createElement('span'); sm.className = 'muted'; sm.textContent = (combos[n] || []).join(' → ');
-    info.appendChild(b); info.appendChild(br); info.appendChild(sm);
-    var del = document.createElement('button'); del.className = 'ghost'; del.textContent = 'hapus';
+    var card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:8px';
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px';
+    var b = document.createElement('b'); b.textContent = 'combo/' + n; b.style.fontFamily = 'var(--mono)';
+    var strat = document.createElement('select');
+    strat.style.cssText = 'width:auto;margin:0;flex:none;font-size:11.5px;padding:5px 8px';
+    ['fallback', 'round-robin'].forEach(function (s) {
+      var o = document.createElement('option'); o.value = s;
+      o.textContent = s === 'fallback' ? 'fallback (urut)' : 'round-robin (giliran)';
+      if ((strategies[n] || 'fallback') === s) o.selected = true;
+      strat.appendChild(o);
+    });
+    strat.onchange = (function (name, el) { return function () { setComboStrategy(name, el.value); }; })(n, strat);
+    var del = document.createElement('button'); del.className = 'ghost'; del.textContent = 'hapus'; del.style.marginLeft = 'auto';
     del.onclick = (function (name) { return function () { delComboF(name); }; })(n);
-    row.appendChild(info); row.appendChild(del);
-    box.appendChild(row);
+    head.appendChild(b); head.appendChild(strat); head.appendChild(del);
+    card.appendChild(head);
+    var list = document.createElement('div');
+    (combos[n] || []).forEach(function (m, i, arr) {
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line);font-size:12px;font-family:var(--mono)';
+      var num = document.createElement('span'); num.className = 'muted'; num.textContent = (i + 1) + '.'; num.style.flex = 'none';
+      var nm = document.createElement('span'); nm.textContent = m; nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      var up = document.createElement('button'); up.className = 'ghost'; up.textContent = '↑'; up.style.cssText = 'padding:3px 8px;flex:none';
+      up.onclick = (function (name, idx) { return function () { moveComboModel(name, idx, -1); }; })(n, i);
+      var dn = document.createElement('button'); dn.className = 'ghost'; dn.textContent = '↓'; dn.style.cssText = 'padding:3px 8px;flex:none';
+      dn.onclick = (function (name, idx) { return function () { moveComboModel(name, idx, 1); }; })(n, i);
+      row.appendChild(num); row.appendChild(nm); row.appendChild(up); row.appendChild(dn);
+      list.appendChild(row);
+    });
+    card.appendChild(list);
+    box.appendChild(card);
   });
 }
 async function addComboF() {
   var k = admKey(); if (!k) return;
   var name = document.getElementById('ft-cname').value.trim().toLowerCase();
-  var models = document.getElementById('ft-cmodels').value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-  if (!name || !models.length) { toast('nama + models wajib diisi', 'err'); return; }
+  var models = (window._comboSel || []).slice();
+  var strat = document.getElementById('ft-cstrat').value;
+  if (!name || !models.length) { toast('nama + pilih minimal 1 model', 'err'); return; }
   try {
-    var r = await fetch('/admin/combos', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k }, body: JSON.stringify({ name: name, models: models }) });
+    var r = await fetch('/admin/combos', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k }, body: JSON.stringify({ name: name, models: models, strategy: strat }) });
     var d = await r.json().catch(function () { return {}; });
     if (!r.ok) { toast('gagal: ' + (d.error || r.status), 'err'); return; }
     document.getElementById('ft-cname').value = '';
-    document.getElementById('ft-cmodels').value = '';
+    window._comboSel = [];
+    renderComboPicker();
     loaded.models = false;
     loadFeatures(); loadModels();
     toast('combo ' + name + ' disimpan ', 'ok');
@@ -3243,6 +3412,7 @@ const server = http.createServer(async (req, res) => {
         vision_strip: config.vision_strip !== false,
         no_vision_models: normStrArr(config.no_vision_models),
         combos: normModelMap(config.combos),
+        combo_strategy: config.combo_strategy || {},
         fallbacks: normModelMap(config.fallbacks),
         round_robin: normModelMap(config.round_robin),
         last_rtk: lastRtkStats,
@@ -3280,7 +3450,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/admin/combos') {
       if (!needAuth(req, res)) return;
-      sendJson(res, 200, { combos: normModelMap(config.combos) });
+      sendJson(res, 200, { combos: normModelMap(config.combos),
+      combo_strategy: config.combo_strategy || {},});
       return;
     }
     if (req.method === 'POST' && p === '/admin/combos') {
@@ -3291,9 +3462,29 @@ const server = http.createServer(async (req, res) => {
       const models = validModelList(body.models);
       if (!validVirtualName(name)) { sendJson(res, 400, { error: 'nama combo invalid (a-z, 0-9, -, maks 31)' }); return; }
       if (!models) { sendJson(res, 400, { error: 'models tidak boleh kosong' }); return; }
+      const strat = body.strategy === 'round-robin' ? 'round-robin' : 'fallback';
       config.combos[name] = models;
+      config.combo_strategy[name] = strat;
       applyFeatureDefaults(); saveConfig(); modelsCache.ts = 0;
-      sendJson(res, 200, { ok: true, combo: name, models });
+      sendJson(res, 200, { ok: true, combo: name, models, strategy: strat });
+      return;
+    }
+    if (req.method === 'PUT' && p.startsWith('/admin/combos/')) {
+      if (!needAuth(req, res)) return;
+      const name = decodeURIComponent(p.slice('/admin/combos/'.length)).toLowerCase();
+      if (!config.combos[name]) { sendJson(res, 404, { error: 'combo tidak ditemukan' }); return; }
+      let body;
+      try { body = JSON.parse(await readBody(req) || '{}'); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+      if (body.strategy !== undefined) {
+        config.combo_strategy[name] = body.strategy === 'round-robin' ? 'round-robin' : 'fallback';
+      }
+      if (body.models !== undefined) {
+        const models = validModelList(body.models);
+        if (!models) { sendJson(res, 400, { error: 'models tidak boleh kosong' }); return; }
+        config.combos[name] = models;
+      }
+      applyFeatureDefaults(); saveConfig(); modelsCache.ts = 0;
+      sendJson(res, 200, { ok: true, combo: name, models: config.combos[name], strategy: config.combo_strategy[name] || 'fallback' });
       return;
     }
     if (req.method === 'DELETE' && p.startsWith('/admin/combos/')) {
