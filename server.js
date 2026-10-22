@@ -18,6 +18,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { execSync } = require('node:child_process');
 const { DatabaseSync } = require('node:sqlite');
 
 const HERE = __dirname;
@@ -1091,6 +1092,34 @@ function stripVisionImages(messages) {
   return n;
 }
 
+// ---------------- version / update ----------------
+// Bandingkan commit git lokal vs kanoya25/rerouter@main (cache 1 jam).
+// Kalau bukan git install, gitRepo=false dan hasUpdate=false.
+let versionCache = { ts: 0, latest: null };
+async function getVersionInfo() {
+  let current = null, gitRepo = false;
+  try {
+    const out = execSync('git rev-parse HEAD', { cwd: __dirname, timeout: 5000 }).toString().trim();
+    if (/^[0-9a-f]{40}$/.test(out)) { current = out.slice(0, 7); gitRepo = true; }
+  } catch {}
+  let latest = null;
+  const now = Date.now();
+  if (versionCache.latest && now - versionCache.ts < 3600e3) {
+    latest = versionCache.latest;
+  } else {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch('https://api.github.com/repos/kanoya25/rerouter/commits/main',
+        { signal: ctrl.signal, headers: { 'User-Agent': 'rerouter' } });
+      clearTimeout(t);
+      if (r.ok) { const j = await r.json(); latest = String(j.sha || '').slice(0, 7) || null; }
+      if (latest) versionCache = { ts: now, latest };
+    } catch {}
+  }
+  return { current, latest, gitRepo, hasUpdate: !!(gitRepo && current && latest && current !== latest) };
+}
+
 // ---------------- combo / fallback / round-robin ----------------
 // combo/<name>  -> coba models berurutan, fallback otomatis (ala 9router combos)
 // rr/<name>     -> round-robin: tiap request giliran model berikutnya
@@ -1290,6 +1319,8 @@ body{margin:0;background:var(--bg);color:var(--txt);font-family:ui-sans-serif,sy
 .hero-meta{min-width:0}
 .hero-meta h1{font-size:15px;margin:0;font-weight:700;letter-spacing:0;font-family:var(--mono);color:var(--txt);text-shadow:none}
 .hero-meta h1 span{color:var(--txt)}
+#upd-badge{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--acc);border:1px solid var(--acc);border-radius:4px;padding:2px 8px;margin-left:8px;vertical-align:middle;cursor:pointer;background:transparent;letter-spacing:.04em}
+#upd-badge.hidden{display:none}
 .hero-meta p{margin:3px 0 0;font-size:11px;color:var(--dim);font-family:var(--mono);white-space:normal;opacity:1}
 .hero-meta p b{color:var(--dim);font-weight:400}
 .hero-side{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
@@ -1443,7 +1474,7 @@ a:hover{text-decoration-color:var(--txt)}
 <div class="hero">
   <div class="hero-in">
     <div class="hero-meta">
-      <h1>rerouter</h1>
+      <h1>rerouter <button id="upd-badge" class="hidden" onclick="showUpdateInfo()" title="update tersedia"></button></h1>
       <p>v0.1</p>
     </div>
     <div class="hero-side">
@@ -1464,6 +1495,12 @@ a:hover{text-decoration-color:var(--txt)}
 
 <div class="wrap">
 
+<div id="upd-banner" class="hidden" style="margin-bottom:12px"><div class="card" style="border-color:var(--acc);margin-bottom:0">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="color:var(--acc);font-family:var(--mono);font-size:12px" id="upd-bannertxt">update tersedia</span>
+    <code class="mono" id="upd-cmd" style="flex:1;font-size:12px;color:var(--mut)">./update.sh</code>
+    <button onclick="copyUpdCmd()">copy perintah</button>
+  </div></div></div>
 <section class="panel active" id="p-overview">
   <div class="stats" id="quick-stats"></div>
   <div class="card hl"><h2>Connect <span class="tag">openai-compatible · buat hermes</span></h2>
@@ -1705,7 +1742,8 @@ async function init() {
 }
 init();
 try { syncConn(); } catch (e) {}
-document.getElementById('key').addEventListener('input', function () { try { syncConn(); } catch (e) {} });
+try { checkVersion(); } catch (e) {}
+document.getElementById('key').addEventListener('input', function () { try { syncConn(); } catch (e) {} try { checkVersion(); } catch (e) {} });
 // ---- quick stats on overview ----
 function stat(k, v, s, cls) {
   return '<div class="stat"><div class="k">' + esc(k) + '</div><div class="v' + (cls ? ' ' + cls : '') + '">' + esc(v) + '</div><div class="s">' + esc(s || '') + '</div></div>';
@@ -2368,6 +2406,32 @@ async function addProvider() {
     if (d.merged) toast(d.added_keys + ' key digabung ke provider ' + d.provider.id + '  (base URL sama)', 'ok');
     else toast('provider ' + id + ' ditambahkan ' + (d.detected ? ' (' + d.detected + ' model auto-detect)' : ''), 'ok');
   } catch (e) { toast('gagal: ' + e, 'err'); }
+}
+// ---- version / update check ----
+var updInfo = null;
+async function checkVersion() {
+  var k = admKey(); if (!k) return;
+  try {
+    var d = await (await fetch('/admin/version', { headers: { Authorization: 'Bearer ' + k } })).json();
+    updInfo = d;
+    var b = document.getElementById('upd-badge');
+    if (d.hasUpdate) {
+      b.classList.remove('hidden');
+      b.textContent = 'update: ' + d.latest;
+      var bn = document.getElementById('upd-banner');
+      bn.classList.remove('hidden');
+      document.getElementById('upd-bannertxt').textContent = 'update tersedia: ' + d.current + ' → ' + d.latest;
+    }
+  } catch (e) {}
+}
+function showUpdateInfo() {
+  if (updInfo && updInfo.hasUpdate) toast('jalankan ./update.sh di folder rerouter lalu restart', 'ok');
+  else toast('sudah versi terbaru', 'ok');
+}
+function copyUpdCmd() {
+  var t = './update.sh';
+  if (navigator.clipboard) navigator.clipboard.writeText(t).then(function(){ toast('perintah dicopy', 'ok'); });
+  else toast(t, 'ok');
 }
 // ---- fitur AI (RTK / caveman / vision / combo / fallback / round-robin) ----
 async function loadFeatures() {
@@ -3195,6 +3259,11 @@ const server = http.createServer(async (req, res) => {
     function validModelList(arr) {
       const list = normStrArr(arr).filter(m => !m.startsWith('combo/') && !m.startsWith('rr/'));
       return list.length ? list : null;
+    }
+    // ---- version / update check (ala 9router /api/version) ----
+    if (req.method === 'GET' && p === '/admin/version') {
+      if (!needAuth(req, res)) return;
+      sendJson(res, 200, await getVersionInfo());
     }
     if (req.method === 'GET' && p === '/admin/combos') {
       if (!needAuth(req, res)) return;
