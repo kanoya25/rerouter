@@ -1292,8 +1292,12 @@ function dedupeModels(list) {
   return out;
 }
 function resolveCandidates(modelId) {
-  if (modelId.startsWith('combo/')) {
-    const name = modelId.slice(6).trim();
+  // combo: support "combo/nama" (rerouter) dan "nama" langsung (ala 9router)
+  let comboName = null;
+  if (modelId.startsWith('combo/')) comboName = modelId.slice(6).trim();
+  else if (config.combos && config.combos[modelId]) comboName = modelId;
+  if (comboName) {
+    const name = comboName;
     const list = config.combos[name];
     if (!list || !list.length) { const e = new Error('combo not found: ' + name); e.status = 404; throw e; }
     const clean = dedupeModels(list.filter(m => !m.startsWith('combo/') && !m.startsWith('rr/')));
