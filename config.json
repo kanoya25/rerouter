@@ -1,0 +1,98 @@
+{
+  "api_key": "rr-9f8dab04c1ae1937ba26c214e59c4198",
+  "headers_fix": {
+    "User-Agent": "opencode/latest/2.0.26/cli",
+    "x-opencode-client": "cli",
+    "x-opencode-project": "global",
+    "x-opencode-session": "ses_ec93e2e19ffeULxsE0VSj5UmDw"
+  },
+  "known_models": [
+    "mimo-v2.6-flash-free"
+  ],
+  "max_failover": 3,
+  "port": 20129,
+  "rotate_strategy": "round-robin",
+  "upstream_timeout_s": 90,
+  "custom_providers": [
+    {
+      "id": "jerouter",
+      "name": "JeRouter",
+      "base_url": "https://je.jerouter.web.id/v1",
+      "api_key": "jr_cup_4xfxyb24mbv2ldxacbm1py428qw",
+      "models": [
+        "step-3.7-flash",
+        "nemotron-3-ultra",
+        "glm-5.3-flash",
+        "north-mini-code",
+        "laguna-xs-2.1",
+        "nemotron-3-super",
+        "laguna-s-2.1",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "grok-4.6",
+        "deepseek-v4.1-flash",
+        "big-pickle",
+        "nemotron-3.5-lightning",
+        "muse-spark-1.3-contributor",
+        "grok-4.7",
+        "mimo-v2.6-flash",
+        "step-5-preview",
+        "deepseek-v4-flash",
+        "space-bunny",
+        "mimo-v2.6-flash-unrestricted",
+        "qwen3.8-flash",
+        "muse-unrestricted",
+        "deepseek-unrestricted",
+        "big-pickle-unrestricted",
+        "longcat-2.5-preview",
+        "longcat-unrestricted",
+        "step-5-unrestricted",
+        "step-3.7-unrestricted",
+        "jerouter",
+        "nemotron-3-ultra-unrestricted",
+        "glm-5.3-flash-unrestricted",
+        "sonnet-unrestricted",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "step-5-preview-opencode",
+        "qwen3.8-omni-flash",
+        "claude-haiku-5.5",
+        "step-3.5-flash-2603",
+        "step-3.5-flash",
+        "cat-jam",
+        "auto",
+        "minimax-m2.7"
+      ],
+      "enabled": true,
+      "api_keys": [
+        "jr_cup_4xfxyb24mbv2ldxacbm1py428qw"
+      ]
+    }
+  ],
+  "rtk_enabled": true,
+  "caveman_enabled": true,
+  "caveman_level": "full",
+  "vision_strip": true,
+  "no_vision_models": [],
+  "combos": {
+    "rerouter": [
+      "oc/deepseek-v4.1-flash-free",
+      "oc/mimo-v2.6-flash-free",
+      "oc/beam-free"
+    ]
+  },
+  "fallbacks": {},
+  "round_robin": {},
+  "dashboard_password_hash": "86a597c1d1a64b1496b5375fff7ca5abe477363717614cf4c35b9459d9b1d824",
+  "provider_relay": {
+    "oc": "round-robin",
+    "jerouter": "direct"
+  },
+  "model_caps": {},
+  "combo_strategy": {
+    "testcombo": "fallback"
+  },
+  "throttle_ms": {
+    "opencode": 2500
+  }
+}

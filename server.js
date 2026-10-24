@@ -103,9 +103,10 @@ function dashAuthed(req) {
 function dashLoginCookie(tok) {
   return 'rr_auth=' + tok + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + Math.floor(DASH_SESSION_TTL / 1000);
 }
-// PR decolia/9router#4842: free tier pindah /zen/v1 -> /inference/v1 (OpenCode v2)
-const ZEN_MODELS_URL = 'https://opencode.ai/inference/v1/models';
-const ZEN_CHAT_URL = 'https://opencode.ai/inference/v1/chat/completions';
+// Wire format reverse-engineered dari OpenCode CLI 1.19.4 (fork serenhope/9router, opencode-v2.js):
+// chat endpoint = /inference/openai/v1/chat/completions (bukan /inference/v1/...)
+const ZEN_MODELS_URL = 'https://opencode.ai/zen/v1/models';
+const ZEN_CHAT_URL = 'https://opencode.ai/inference/openai/v1/chat/completions';
 const TIMEOUT_MS = Math.floor((Number(config.upstream_timeout_s) || 90) * 1000);
 const MAX_FAILOVER = Number(config.max_failover) || 3;
 let API_KEY = config.api_key || '';
@@ -203,22 +204,61 @@ function rebuildProviders() {
 }
 
 // ---------------- providers (universal-ready registry) ----------------
+// --- OpenCode CLI 1.19.4 wire IDs (port dari fork serenhope/9router) ---
+const OC_B62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+let ocLastTs = 0, ocCounter = 0;
+function ocRandom14() {
+  let s = '';
+  const b = require('crypto').randomBytes(14);
+  for (let i = 0; i < 14; i++) s += OC_B62[b[i] % 62];
+  return s;
+}
+function ocBitwiseId(isSession) {
+  const ts = Date.now();
+  if (ts !== ocLastTs) { ocLastTs = ts; ocCounter = 0; }
+  ocCounter++;
+  const combined = BigInt(ts) * 0x1000n + BigInt(ocCounter);
+  const v = isSession ? ~combined : combined;
+  let hex = '';
+  for (let i = 0; i < 6; i++) {
+    hex += Number((v >> BigInt(40 - 8 * i)) & 0xffn).toString(16).padStart(2, '0');
+  }
+  return hex + ocRandom14();
+}
+function ocSessionId() { return 'ses_' + ocBitwiseId(true); }
+function ocRequestId() { return 'msg_' + ocBitwiseId(false); }
+// session stabil per proses (ala fork serenhope 5a07d73): dipakai terus sampai kena
+// FreeUsageLimitError, baru rotate. Fresh tiap request malah boros kuota / ke-detect abuse.
+let ocStableSession = null;
+function ocStableSessionId() {
+  if (!ocStableSession) ocStableSession = ocSessionId();
+  return ocStableSession;
+}
+function ocRotateSession() {
+  ocStableSession = ocSessionId();
+  console.log('[opencode] session rotated ->', ocStableSession.slice(0, 16) + '...');
+  return ocStableSession;
+}
+const OC_V2_UA = 'opencode/1.19.4 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4';
+
 function opencodeHeaders() {
-  // PR decolia/9router#4842: v2 CLI shape.
-  // - UA: opencode/1.18.x ditolak upstream 403 FreeTierError sejak 2026-10-14
-  // - x-opencode-request (v1) dihapus: upstream balas 403 kalau ada
-  // - upstream butuh x-opencode-session-id di samping x-opencode-session
-  const session = HEADERS_FIX['x-opencode-session'] || '';
+  // Wire format CLI 1.19.4 asli (fork serenhope/9router):
+  // - UA: opencode/1.19.4 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4
+  // - session fresh per request: ses_<12hex><14base62> (bitwise timestamp)
+  // - x-opencode-request: msg_<...> fresh per request
+  // - TANPA x-session-affinity / x-session-id (nggak ada di CLI asli; telltale)
+  // - TANPA prompt injection "do not call tools" (upstream filter -> 429)
+  const session = ocStableSessionId();
   return {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer public',
-    'User-Agent': 'opencode/latest/2.0.26/cli',
+    'User-Agent': OC_V2_UA,
     'x-opencode-client': 'cli',
     'x-opencode-project': HEADERS_FIX['x-opencode-project'] || 'global',
     'x-opencode-session': session,
     'x-opencode-session-id': session,
-    'x-session-affinity': session,
-    'x-session-id': session,
+    'x-opencode-request': ocRequestId(),
+    'Accept': 'text/event-stream',
   };
 }
 // OpenCode v2 free-tier gate (PR #4860/#4842): request WAJIB declare tools
@@ -470,10 +510,13 @@ function initDb() {
   db.exec(`CREATE TABLE IF NOT EXISTS usage_log(
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, provider TEXT,
     model TEXT, relay TEXT, status INTEGER, ms INTEGER)`);
-  // karantina relay kena 429 (limit 24 jam opencode): url -> sampai kapan di-skip
+  // karantina relay kena 429 (exponential backoff ala 9router): url -> sampai kapan di-skip
   db.exec(`CREATE TABLE IF NOT EXISTS relay_cooldowns(
     url TEXT PRIMARY KEY, limited_until INTEGER DEFAULT 0,
-    strikes INTEGER DEFAULT 0, last_429_ts INTEGER DEFAULT 0)`);
+    strikes INTEGER DEFAULT 0, last_429_ts INTEGER DEFAULT 0,
+    banned INTEGER DEFAULT 0, ban_reason TEXT DEFAULT '')`);
+  try { db.exec('ALTER TABLE relay_cooldowns ADD COLUMN banned INTEGER DEFAULT 0'); } catch {}
+  try { db.exec("ALTER TABLE relay_cooldowns ADD COLUMN ban_reason TEXT DEFAULT ''"); } catch {}
   // migrasi: kolom token (abaikan bila sudah ada)
   for (const col of ['prompt_tokens INTEGER DEFAULT 0', 'completion_tokens INTEGER DEFAULT 0', 'cached_tokens INTEGER DEFAULT 0']) {
     try { db.exec(`ALTER TABLE usage_log ADD COLUMN ${col}`); } catch {}
@@ -531,32 +574,80 @@ function pickPool(pools, strategy) {
   if (s === 'round-robin') return pools[(rrCounter++) % pools.length];
   return pools[Math.floor(Math.random() * pools.length)]; // random default
 }
-// ---- karantina 429: relay yang kena rate limit di-skip 24 jam, auto-pulih ----
-const QUARANTINE_SECS = 24 * 3600; // 24 jam (limit harian opencode)
+// ---- karantina 429: relay yang kena rate limit di-skip (exponential backoff), auto-pulih ----
+// Backoff 429 ala 9router (BACKOFF_CONFIG): exponential, bukan ban 24 jam.
+// Strike 1 -> 2 mnt, lalu 4, 8, 16, maks 30 mnt. Relay balik ke rotasi begitu cooldown habis.
+const RL_BACKOFF_BASE_SECS = 120;
+const RL_BACKOFF_MAX_SECS = 1800;
+const RL_QUOTA_MAX_SECS = 21600; // 6 jam khusus FreeUsageLimitError (kuota, bukan glitch sesaat)
+const RL_BAN_AFTER_STRIKES = 3; // auto-ban permanen setelah 3x kena FreeUsageLimitError
+const QUARANTINE_SECS = RL_BACKOFF_MAX_SECS; // fallback bila strikes tak terbaca
 const QUARANTINE_403_SECS = 3600;  // 1 jam (403 FreeTierError: blokir IP egress relay, intermittent)
 // error yang bisa di-failover ke relay lain (ala 9router #5046): 403/429/5xx + network error.
 // 4xx lain (400/401/404/422) itu request-scoped -> langsung balikin, jangan bakar relay.
 const FALLBACKABLE = new Set([403, 429, 500, 502, 503, 504]);
-function quarantineRelay(relay, secs, status) {
+function quarantineRelay(relay, secs, status, retryAfterSecs, isQuota) {
   try {
     const now = Math.floor(Date.now() / 1000);
     try { db.prepare('DELETE FROM relay_cooldowns WHERE limited_until < ?').run(now); } catch {}
-    const s = Math.min(Math.max(parseInt(secs) || QUARANTINE_SECS, 60), QUARANTINE_SECS);
+    let s;
+    const maxSecs = isQuota ? RL_QUOTA_MAX_SECS : RL_BACKOFF_MAX_SECS;
+    if (retryAfterSecs && retryAfterSecs > 0) {
+      // honor Retry-After upstream (ala 9router PR #3612), cap di max backoff
+      s = Math.min(Math.max(Math.ceil(retryAfterSecs), 5), maxSecs);
+    } else {
+      // exponential backoff berdasar strikes: kuota 2m,4m,...,maks 6 jam; biasa maks 30 mnt
+      let strikes = 0;
+      try {
+        const r = db.prepare('SELECT strikes FROM relay_cooldowns WHERE url=?').get(relay);
+        strikes = (r && r.strikes) || 0;
+      } catch {}
+      s = Math.min(RL_BACKOFF_BASE_SECS * Math.pow(2, strikes), maxSecs);
+    }
     db.prepare(`INSERT INTO relay_cooldowns(url, limited_until, strikes, last_429_ts)
       VALUES(?,?,1,?)
       ON CONFLICT(url) DO UPDATE SET limited_until=excluded.limited_until,
         strikes=relay_cooldowns.strikes+1, last_429_ts=excluded.last_429_ts`)
       .run(relay, now + s, now);
-    console.log(`[quarantine] ${relay} dikarantina ${Math.round(s / 3600)} jam (HTTP ${status || '?'})`);
+    const lbl = s >= 3600 ? (s/3600).toFixed(1) + ' jam' : (s >= 60 ? Math.round(s / 60) + ' mnt' : s + ' dtk');
+    console.log(`[quarantine] ${relay} cooldown ${lbl} (HTTP ${status || '?'})`);
+    // auto-ban permanen: 3x kena FreeUsageLimitError = IP mati, jangan dipakai lagi (ala #5149)
+    if (isQuota) {
+      try {
+        const r2 = db.prepare('SELECT strikes FROM relay_cooldowns WHERE url=?').get(relay);
+        if (r2 && r2.strikes >= RL_BAN_AFTER_STRIKES) {
+          db.prepare("UPDATE relay_cooldowns SET banned=1, ban_reason='auto: 3x FreeUsageLimitError' WHERE url=?").run(relay);
+          console.log(`[ban] ${relay} di-ban permanen (3x kuota habis)`);
+        }
+      } catch {}
+    }
+  } catch {}
+}
+// ---- throttle per provider: jeda antar request biar burst nggak jebol kuota rolling window ----
+// config.throttle_ms = { opencode: 2500 } -> min 2.5 dtk antar request opencode; 0/absen = mati
+const lastUpstreamTs = {};
+async function throttleWait(providerName) {
+  try {
+    const ms = parseInt((config.throttle_ms && config.throttle_ms[providerName]) || 0, 10);
+    if (!ms || ms <= 0) return;
+    const now = Date.now();
+    const last = lastUpstreamTs[providerName] || 0;
+    const wait = ms - (now - last);
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastUpstreamTs[providerName] = Date.now();
   } catch {}
 }
 function clearRelayQuarantine(relay) {
-  try { db.prepare('DELETE FROM relay_cooldowns WHERE url=?').run(relay); } catch {}
+  // sukses (200): reset strikes & cooldown, tapi JANGAN hapus ban permanen
+  try { db.prepare('UPDATE relay_cooldowns SET limited_until=0, strikes=0 WHERE url=? AND banned=0').run(relay); } catch {}
+  try { db.prepare('DELETE FROM relay_cooldowns WHERE url=? AND banned=0 AND strikes=0 AND limited_until=0').run(relay); } catch {}
 }
 function isRelayQuarantined(relay) {
   try {
-    const r = db.prepare('SELECT limited_until FROM relay_cooldowns WHERE url=?').get(relay);
-    return !!(r && r.limited_until > Math.floor(Date.now() / 1000));
+    const r = db.prepare('SELECT limited_until, banned FROM relay_cooldowns WHERE url=?').get(relay);
+    if (!r) return false;
+    if (r.banned) return true; // di-ban permanen
+    return r.limited_until > Math.floor(Date.now() / 1000);
   } catch { return false; }
 }
 function quarantinedSet() {
@@ -819,21 +910,24 @@ function providerRelayMode(pname) {
   if (p && p.direct) return 'direct';
   return STRATEGY; // fallback terakhir bila belum termigrasi
 }
-async function upstreamTry(providerName, bareModel, payload) {
+async function upstreamTry(providerName, bareModel, payload, logModel) {
+  // format display: "combo/nama (oc/model-asli)" biar kebaca combo + model yg dipakai
+  const dispModel = (logModel && logModel !== bareModel) ? `${logModel} (${bareModel})` : (logModel || bareModel);
+  await throttleWait(providerName); // jeda burst -> kuota rolling window nggak jebol seketika
   const p = PROVIDERS[providerName];
   const mode = providerRelayMode(providerName);
-  if (mode === 'direct') return upstreamDirect(providerName, bareModel, payload);
+  if (mode === 'direct') return upstreamDirect(providerName, bareModel, payload, logModel);
   let pools = availablePools(); // skip relay yang lagi dikarantina 429
   if (!pools.length) {
     const q = quarantineList().length;
     const err = new Error(q
-      ? `semua ${q} relay lagi dikarantina 429 (limit 24 jam), coba lagi nanti`
+      ? `semua ${q} relay lagi cooldown 429, coba lagi nanti`
       : 'no active relays in pool');
     err.status = q ? 429 : 502;
     throw err;
   }
   const body = p.build_body_fn(bareModel, payload);
-  const headers = p.headers_fn();
+  let headers = p.headers_fn();
   let lastErr = 'unknown';
   let lastStatus = 502;
   // jalanin relay sehat satu-satu (ala 9router #5046), dibatasi biar nggak gantung:
@@ -860,8 +954,26 @@ async function upstreamTry(providerName, bareModel, payload) {
       if (resp.status !== 200) {
         const errBody = (await resp.text().catch(() => '')).slice(0, 300);
         try { await resp.arrayBuffer(); } catch {}
-        logUse(providerName, bareModel, relay, resp.status, Date.now() - t0);
-        if (resp.status === 429) quarantineRelay(relay, QUARANTINE_SECS, 429);
+        logUse(providerName, dispModel, relay, resp.status, Date.now() - t0);
+        // 429 dari opencode = kuota per IP/relay habis (terbukti relay lain bisa 200).
+        // Quarantine 6 jam + rotate session (ala syncholex #5107: kuota per session+IP),
+        // lanjut ke relay lain dgn session baru.
+        if (resp.status === 429 && providerName === 'opencode') {
+          quarantineRelay(relay, 0, 429, 0, true); // isQuota=true -> backoff 6 jam
+          logUse(providerName, dispModel, relay, 429, Date.now() - t0);
+          try { await resp.arrayBuffer(); } catch {}
+          ocRotateSession();
+          headers = p.headers_fn(); // rebuild dgn session baru
+          continue; // coba relay lain dgn session baru
+        }
+        if (resp.status === 429) {
+          let raSecs = 0;
+          try {
+            const ra = resp.headers && resp.headers.get('retry-after');
+            if (ra) { const n = parseInt(String(ra).trim(), 10); if (n > 0) raSecs = n; }
+          } catch {}
+          quarantineRelay(relay, 0, 429, raSecs);
+        }
         else if (resp.status === 403) quarantineRelay(relay, QUARANTINE_403_SECS, 403);
         if (!FALLBACKABLE.has(resp.status)) {
           // request-scoped (400/401/404/422): salah di request-nya, jangan bakar relay lain
@@ -874,11 +986,12 @@ async function upstreamTry(providerName, bareModel, payload) {
         continue;
       }
       clearRelayQuarantine(relay); // relay sehat lagi -> hapus karantina
-      const logId = logUse(providerName, bareModel, relay, 200, Date.now() - t0);
+      const logId = logUse(providerName, dispModel, relay, 200, Date.now() - t0);
       return [relay, resp, logId];
     } catch (e) {
+      if (e && e.quotaExhausted) throw e; // kuota akun habis: stop, jangan bakar relay lain
       if (e.status && !FALLBACKABLE.has(e.status)) throw e; // request-scoped, teruskan apa adanya
-      logUse(providerName, bareModel, relay, 0, Date.now() - t0);
+      logUse(providerName, dispModel, relay, 0, Date.now() - t0);
       lastErr = `${relay} -> ${e.name}: ${String(e.message || e).slice(0, 150)}`;
       continue;
     }
@@ -889,7 +1002,8 @@ async function upstreamTry(providerName, bareModel, payload) {
 }
 
 // custom provider: request langsung ke base_url, tanpa relay pool
-async function upstreamDirect(providerName, bareModel, payload) {
+async function upstreamDirect(providerName, bareModel, payload, logModel) {
+  const dispModel = (logModel && logModel !== bareModel) ? `${logModel} (${bareModel})` : (logModel || bareModel);
   const p = PROVIDERS[providerName];
   const t0 = Date.now();
   try {
@@ -909,16 +1023,16 @@ async function upstreamDirect(providerName, bareModel, payload) {
     if (resp.status !== 200) {
       const errBody = (await resp.text().catch(() => '')).slice(0, 300);
       try { await resp.arrayBuffer(); } catch {}
-      logUse(providerName, bareModel, 'direct', resp.status, Date.now() - t0);
+      logUse(providerName, dispModel, 'direct', resp.status, Date.now() - t0);
       const err = new Error(`${p.chat_url} -> HTTP ${resp.status} ${errBody}`);
       err.status = resp.status;
       throw err;
     }
-    const logIdD = logUse(providerName, bareModel, 'direct', 200, Date.now() - t0);
+    const logIdD = logUse(providerName, dispModel, 'direct', 200, Date.now() - t0);
     return ['direct', resp, logIdD];
   } catch (e) {
     if (e.status) throw e;
-    logUse(providerName, bareModel, 'direct', 0, Date.now() - t0);
+    logUse(providerName, dispModel, 'direct', 0, Date.now() - t0);
     const err = new Error(`${p.chat_url} -> ${e.name}: ${String(e.message || e).slice(0, 150)}`);
     err.status = 502;
     throw err;
@@ -1203,8 +1317,11 @@ function resolveCandidates(modelId) {
   return dedupeModels([modelId, ...fb]).slice(0, 6);
 }
 function isRetryableUpstream(err) {
+  // quotaExhausted tetap retryable: kandidat lain beda provider bisa beda kuota.
+  // yg di-stop cuma failover antar-relay di dalam upstreamTry (satu akun yg sama).
   const s = err && err.status;
   if (s === 429 || s === 500 || s === 502 || s === 503 || s === 504) return true;
+  if (s === 400 || s === 404 || s === 410) return true; // model deprecated/unsupported: lanjut ke kandidat berikut (combo)
   if (!s) return true; // network error / abort
   const m = String((err && err.message) || '').toLowerCase();
   return /rate.?limit|quota|overloaded|capacity|too many|timeout|timed out|temporar|unavailable|socket|econn|fetch failed/i.test(m);
@@ -1648,6 +1765,16 @@ a:hover{text-decoration-color:var(--txt)}
     <div class="muted" style="margin-bottom:12px">Relay dipakai untuk menyamarkan IP egress. Atur strategi tiap provider.</div>
     <div id="relay-provs" style="margin-top:6px"></div>
     <div id="relay-quar" style="margin-top:10px"></div>
+    <div id="relay-banned" style="margin-top:10px"></div>
+    <div style="margin-top:12px;border-top:1px solid #222;padding-top:10px">
+      <div class="muted" style="margin-bottom:8px">Test bulk semua relay (cek 429). Yang kena kuota otomatis di-quarantine/ban.</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="tp-limit" type="number" value="50" min="1" max="500" style="width:80px" placeholder="jumlah">
+        <button class="ghost" id="tp-btn" onclick="runPoolTest()">test pools</button>
+        <span id="tp-status" class="muted"></span>
+      </div>
+      <div id="tp-result" style="margin-top:8px;font-size:12px"></div>
+    </div>
   </div>
   <div class="card"><h2>Speed Test <span class="tag">latency per provider</span></h2>
     <div class="muted" style="margin-bottom:10px">Test model tercepat/stabil tiap provider sebelum ganti model. Prompt kecil, diulang beberapa kali.</div>
@@ -2150,7 +2277,7 @@ async function loadRelay() {
       row.appendChild(nm); row.appendChild(sel);
       box.appendChild(row);
     });
-    // karantina 429: daftar relay yang lagi di-skip 24 jam
+    // karantina 429: daftar relay yang lagi cooldown (backoff)
     var qb = document.getElementById('relay-quar');
     qb.innerHTML = '';
     var ql = d.quarantined || [];
@@ -2166,7 +2293,81 @@ async function loadRelay() {
       ca.onclick = function () { clearQuarantine('*'); };
       qb.appendChild(ca);
     }
+    // daftar ban permanen (3x kena kuota) + tombol unban
+    var bl = d.banned || [];
+    var bb = document.getElementById('relay-banned');
+    if (bb) {
+      bb.innerHTML = '';
+      if (bl.length) {
+        var bh = document.createElement('div');
+        bh.className = 'muted';
+        bh.style.marginBottom = '6px';
+        bh.textContent = 'Di-ban permanen: ' + bl.length + ' relay (3x kena 429 kuota)';
+        bb.appendChild(bh);
+        bl.slice(0, 20).forEach(function (it) {
+          var row = document.createElement('div');
+          row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #222;font-size:12px';
+          var nm = document.createElement('span');
+          nm.textContent = String(it.url).slice(8, 45);
+          nm.title = it.url;
+          var ub = document.createElement('button');
+          ub.className = 'ghost'; ub.textContent = 'unban';
+          ub.onclick = (function (u) { return function () { unbanRelay(u); }; })(it.url);
+          row.appendChild(nm); row.appendChild(ub);
+          bb.appendChild(row);
+        });
+        if (bl.length > 20) {
+          var more = document.createElement('div');
+          more.className = 'muted';
+          more.textContent = '... +' + (bl.length - 20) + ' lagi';
+          bb.appendChild(more);
+        }
+        var ua = document.createElement('button');
+        ua.className = 'ghost'; ua.textContent = 'unban semua';
+        ua.style.marginTop = '6px';
+        ua.onclick = function () { unbanRelay('*'); };
+        bb.appendChild(ua);
+      }
+    }
   } catch (e) {}
+}
+async function unbanRelay(u) {
+  var k = admKey(); if (!k) return;
+  var r = await fetch('/admin/relay', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k },
+    body: JSON.stringify({ unban: u }),
+  });
+  toast(r.ok ? 'unbanned' : 'gagal', r.ok ? 'ok' : 'err');
+  if (r.ok) loadRelay();
+}
+async function runPoolTest() {
+  var k = admKey(); if (!k) return;
+  var btn = document.getElementById('tp-btn');
+  var st = document.getElementById('tp-status');
+  var out = document.getElementById('tp-result');
+  var limit = Math.min(Math.max(parseInt(document.getElementById('tp-limit').value) || 50, 1), 500);
+  btn.disabled = true;
+  st.textContent = 'testing ' + limit + ' relay... bisa beberapa menit';
+  out.innerHTML = '';
+  try {
+    var r = await fetch('/admin/test-pools', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k },
+      body: JSON.stringify({ limit: limit }),
+    });
+    var d = await r.json();
+    if (!r.ok) { st.textContent = 'gagal: ' + (d.error || r.status); return; }
+    st.textContent = 'selesai: ' + d.healthy + ' sehat, ' + d.quota429 + ' kena 429 dari ' + d.tested;
+    var html = '<div class="muted" style="margin-bottom:4px">Hasil (20 pertama):</div>';
+    (d.results || []).slice(0, 20).forEach(function (x) {
+      var c = x.note === 'ok' ? '#4ade80' : (x.note === 'quota 429' ? '#f87171' : '#fbbf24');
+      html += '<div style="padding:2px 0;border-bottom:1px solid #1a1a1a"><span style="color:' + c + '">●</span> ' + x.relay + ' — ' + x.note + ' (' + x.ms + 'ms)</div>';
+    });
+    out.innerHTML = html;
+    loadRelay(); // refresh ban list
+  } catch (e) { st.textContent = 'error: ' + e; }
+  btn.disabled = false;
 }
 async function clearQuarantine(u) {
   var k = admKey(); if (!k) return;
@@ -2924,7 +3125,7 @@ const server = http.createServer(async (req, res) => {
           if (config.caveman_enabled) { injectCaveman(p2.messages, config.caveman_level); cavemanOn = true; }
         }
         try {
-          [relay, resp, logId] = await upstreamTry(providerName, bare, p2);
+          [relay, resp, logId] = await upstreamTry(providerName, bare, p2, modelId);
           usedModel = cand;
           usedProvider = providerName;
           lastErr = null;
@@ -3274,11 +3475,14 @@ const server = http.createServer(async (req, res) => {
       if (!needAuth(req, res)) return;
       const provs = [{ id: 'oc', name: 'opencode' }];
       for (const c of customProviderDefs()) provs.push({ id: String(c.id).toLowerCase(), name: c.name || c.id });
+      let banned = [];
+      try { banned = db.prepare('SELECT url, ban_reason, last_429_ts FROM relay_cooldowns WHERE banned=1').all(); } catch {}
       sendJson(res, 200, {
         ok: true,
         pools_active: activePools().length,
         pools_available: availablePools().length,
         quarantined: quarantineList(),
+        banned: banned,
         providers: provs.map(x => {
           const pname = x.id === 'oc' ? 'opencode' : x.id;
           const eff = providerRelayMode(pname);
@@ -3305,8 +3509,57 @@ const server = http.createServer(async (req, res) => {
         if (u === '*') { try { db.exec('DELETE FROM relay_cooldowns'); } catch {} }
         else clearRelayQuarantine(u);
       }
+      if (body.ban) { // ban permanen manual
+        const u = String(body.ban);
+        try { db.prepare("INSERT INTO relay_cooldowns(url, banned, ban_reason, last_429_ts) VALUES(?,1,'manual',?) ON CONFLICT(url) DO UPDATE SET banned=1, ban_reason='manual'").run(u, Math.floor(Date.now()/1000)); } catch {}
+      }
+      if (body.unban) { // buka ban
+        const u = String(body.unban);
+        if (u === '*') { try { db.prepare('UPDATE relay_cooldowns SET banned=0, ban_reason="", strikes=0, limited_until=0').run(); } catch {} }
+        else try { db.prepare('UPDATE relay_cooldowns SET banned=0, ban_reason="", strikes=0, limited_until=0 WHERE url=?').run(u); } catch {}
+      }
       saveConfig();
       sendJson(res, 200, { ok: true, provider_relay: config.provider_relay });
+      return;
+    }
+    // bulk pool tester: test semua relay satu per satu, tandai yg 429 (quota) -> auto quarantine/ban
+    // dipakai dari dashboard (tombol), JANGAN auto-run
+    if (req.method === 'POST' && p === '/admin/test-pools') {
+      if (!needAuth(req, res)) return;
+      let body;
+      try { body = JSON.parse(await readBody(req) || '{}'); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+      const limit = Math.min(Math.max(parseInt(body.limit) || 50, 1), 500);
+      const model = String(body.model || 'oc/beam-free');
+      const pools = activePools().slice(0, limit);
+      const results = [];
+      for (const relay of pools) {
+        const t0 = Date.now();
+        let status = 0, note = '';
+        try {
+          const headers = opencodeHeaders();
+          const r = await fetch(relayTarget(relay, ZEN_CHAT_URL), {
+            method: 'POST', headers,
+            body: JSON.stringify({ model: model.replace(/^oc\//,''), messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false }),
+            signal: AbortSignal.timeout(15000),
+          });
+          status = r.status;
+          const txt = (await r.text().catch(() => '')).slice(0, 200).toLowerCase();
+          if (status === 429 || txt.includes('freeusagelimiterror') || txt.includes('free usage limit')) {
+            note = 'quota 429';
+            quarantineRelay(relay, 0, 429, 0, true); // auto quarantine + ban setelah 3x
+          } else if (status === 200) {
+            note = 'ok';
+            clearRelayQuarantine(relay);
+          } else {
+            note = 'http ' + status;
+          }
+          try { await r.arrayBuffer(); } catch {}
+        } catch (e) { note = 'error: ' + String((e && e.message) || e).slice(0, 60); }
+        results.push({ relay: relay.slice(8, 40), status, note, ms: Date.now() - t0 });
+      }
+      const ok = results.filter(x => x.note === 'ok').length;
+      const q429 = results.filter(x => x.note === 'quota 429').length;
+      sendJson(res, 200, { ok: true, tested: results.length, healthy: ok, quota429: q429, results });
       return;
     }
     // speed test: ukur latency per model per provider (bantu pilih model tercepat/stabil)
@@ -3400,6 +3653,7 @@ const server = http.createServer(async (req, res) => {
         caveman_level: config.caveman_level || 'full',
         vision_strip: config.vision_strip !== false,
         no_vision_models: normStrArr(config.no_vision_models),
+        throttle_ms: config.throttle_ms || {},
         combos: normModelMap(config.combos),
         combo_strategy: config.combo_strategy || {},
         fallbacks: normModelMap(config.fallbacks),
